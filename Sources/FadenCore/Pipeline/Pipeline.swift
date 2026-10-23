@@ -191,6 +191,7 @@ public actor Pipeline {
         try createFadenDirectory()
         try Data(result.text.utf8).write(to: draftURL(Self.draftName), options: .atomic)
         s.draftNotesFile = Self.draftName
+        s.styleName = Self.shortName(style)
         let call = PaidCall(model: result.model, usage: result.usage)
         s.notesCall = call
         record(call)
@@ -235,10 +236,11 @@ public actor Pipeline {
         let draft = try loadDraft(s)
         let findings = s.findings ?? []
         let merged = Verifier.merge(findings, into: draft)
-        let style = try styles.resolve(id: s.styleID, hasSlides: !s.slides.isEmpty)
+        // States saved before `styleName` existed resolve the style file instead.
+        let styleName = try s.styleName ?? Self.shortName(styles.resolve(id: s.styleID, hasSlides: !s.slides.isEmpty))
 
         let header = NotesHeader(
-            date: now(), style: Self.shortName(style), slides: s.slides.map(\.lastPathComponent),
+            date: now(), style: styleName, slides: s.slides.map(\.lastPathComponent),
             audio: s.audio.map(\.lastPathComponent), userNotes: s.userNotes?.lastPathComponent,
             notesCall: s.notesCall ?? PaidCall(model: NotesPrompt.model, usage: Usage()), verifyCall: s.verifyCall,
             verification: s.verificationSkipped ?? "ok, \(findings.count - merged.unmatched) flagged")

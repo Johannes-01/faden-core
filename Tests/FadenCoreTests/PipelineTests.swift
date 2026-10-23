@@ -254,6 +254,22 @@ actor FakeClient: MessageSending {
         #expect(notes.contains("> Cost: $0.08"))
     }
 
+    @Test func savingUsesTheStyleNameFromTheNotesStage() async throws {
+        let env = try makeEnv()
+        defer { env.cleanup() }
+        let styleFile = env.styles.dir.appendingPathComponent("C-red-line.md")
+        // The style is deleted after the notes call, e.g. while the check runs.
+        let client = FakeClient([FakeClient.notes(), FakeClient.verify()]) { call in
+            if call == 2 { try? FileManager.default.removeItem(at: styleFile) }
+        }
+        let state = await makePipeline(env, transcriber: FakeTranscriber(), client: client).run(makeState(env))
+
+        #expect(state.stage == .done)
+        #expect(state.styleName == "C")
+        let notes = try String(contentsOf: env.folder.notesURL, encoding: .utf8)
+        #expect(notes.contains(" · style C · "))
+    }
+
     @Test func retryAfterSuccessDoesNothing() async throws {
         let env = try makeEnv()
         defer { env.cleanup() }
