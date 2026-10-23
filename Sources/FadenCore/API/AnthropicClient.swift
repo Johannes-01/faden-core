@@ -46,6 +46,8 @@ public struct MessageResult: Sendable {
 
 public enum AnthropicError: Error, Equatable, Sendable {
     case missingKey
+    /// The Keychain returned this error when reading the key.
+    case keyUnreadable(status: Int32)
     case http(status: Int, type: String?, message: String?)
     case refused(category: String?)
     case truncated

@@ -358,6 +358,7 @@ public actor Pipeline {
         case PipelineError.noSpeech: return "No speech found"
         case PipelineError.missingDraft: return "The draft notes are missing; process the lecture again"
         case AnthropicError.missingKey: return "Add your Anthropic API key in Settings"
+        case AnthropicError.keyUnreadable(let status): return "Couldn't read the API key from the Keychain (\(status))"
         case AnthropicError.refused(let category):
             return "The model declined this lecture (category: \(category ?? "unknown"))"
         case AnthropicError.http(let status, _, let message):
