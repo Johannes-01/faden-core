@@ -58,7 +58,8 @@ import Testing
         let content = try #require(messages.first?["content"] as? [[String: Any]])
         #expect(content.map { $0["type"] as? String } == ["document", "text", "text"])
         #expect(content[0]["title"] as? String == "deck.pdf")
-        #expect(content[0]["cache_control"] != nil)
+        // The cache is per model and the notes call uses another one, so a cache write here is never read.
+        #expect(content.allSatisfy { $0["cache_control"] == nil })
         #expect(content[1]["text"] as? String == transcript.markdown())
         #expect((content[2]["text"] as? String)?.hasSuffix("NOTES BODY") == true)
 

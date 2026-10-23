@@ -19,8 +19,9 @@ public enum Verifier {
     static let flag = " ⚠️ not found in sources"
 
     public static func request(notes: String, transcript: Transcript, slides: [URL]) throws -> MessageRequest {
-        // Slides first (the last block is cached), then the transcript, then the notes under test.
-        var content = try SlideInput.blocks(for: slides)
+        // Slides first, then the transcript, then the notes under test. Nothing is cached: the cache is
+        // per model, so the notes call's cached slides can't be read here, and a check runs once per lecture.
+        var content = try SlideInput.blocks(for: slides, cacheLast: false)
         content.append(.text(transcript.markdown(), cache: false))
         content.append(.text("Notes to check:\n\n" + notes, cache: false))
 

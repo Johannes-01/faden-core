@@ -19,10 +19,11 @@ public enum SlideInput {
     /// together exceed `maxTotalBytes` (raw file bytes), the largest by size is sent as extracted text
     /// instead; then, while they exceed `maxTotalPages`, the one with the most pages is. Text-only decks
     /// count their text's bytes and no pages.
-    /// The last block is marked for caching, so re-runs and the verify call can reuse the prefix.
+    /// With `cacheLast`, the last block is marked for caching, so re-runs of the notes call reuse the prefix.
     public static func blocks(for pdfs: [URL],
                               maxTotalBytes: Int = defaultMaxTotalBytes,
-                              maxTotalPages: Int = defaultMaxTotalPages) throws -> [ContentBlock] {
+                              maxTotalPages: Int = defaultMaxTotalPages,
+                              cacheLast: Bool = true) throws -> [ContentBlock] {
         let datas = try pdfs.map { try Data(contentsOf: $0) }
         let pageCounts = try zip(pdfs, datas).map { url, data in
             guard let document = PDFDocument(data: data) else {
@@ -54,7 +55,7 @@ public enum SlideInput {
             totalPages -= pageCounts[i]
         }
 
-        if let last = blocks.indices.last {
+        if cacheLast, let last = blocks.indices.last {
             blocks[last] = blocks[last].cached()
         }
         return blocks
