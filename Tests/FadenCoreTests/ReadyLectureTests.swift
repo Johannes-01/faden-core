@@ -286,6 +286,38 @@ import Testing
         #expect(ReadyLecture.load(folder)?.state.userNotes == notes)
     }
 
+    @Test func partsOnDiskButNotListedAreFoundIncludedAndBlockProcessing() async throws {
+        let env = try makeEnv()
+        defer { env.cleanup() }
+        let folder = try LectureFolder.create(in: env.course, date: Self.startedAt, title: "Unlisted")
+        let names = ["audio.m4a", "audio-2.m4a", "audio-3.m4a", "audio-10.m4a"]
+        for name in names { try Data("a".utf8).write(to: folder.url.appendingPathComponent(name)) }
+        var ready = try ReadyLecture.addingPart(
+            folder.audioURL, pauses: [.pause(at: 1, duration: 1)], to: folder, slides: [], userNotes: nil,
+            styleID: "C-red-line", allowAdditions: true, language: nil, titleIsPlaceholder: false, now: Self.startedAt)
+        ready = try ReadyLecture.addingPart(
+            folder.url.appendingPathComponent("audio-3.m4a"), pauses: [.pause(at: 2, duration: 1)], to: folder,
+            slides: [], userNotes: nil, styleID: "C-red-line", allowAdditions: true, language: nil,
+            titleIsPlaceholder: false, now: Self.startedAt)
+        // Saved by Stop, but never recorded in the state (e.g. saving the state failed).
+        #expect(ready.unlistedParts().map(\.lastPathComponent) == ["audio-2.m4a", "audio-10.m4a"])
+
+        await #expect(throws: ReadyLectureError.unlisted(["audio-2.m4a", "audio-10.m4a"])) {
+            _ = try await ready.processingState(styleID: "C-red-line", allowAdditions: true, language: nil,
+                                                duration: { _ in 1 })
+        }
+
+        try ready.include(ready.unlistedParts())
+        #expect(ready.unlistedParts().isEmpty)
+        #expect(ready.parts.map(\.file) == names)
+        #expect(ReadyLecture.load(folder) == ready)
+        let durations: [String: TimeInterval] = ["audio.m4a": 10, "audio-2.m4a": 20, "audio-3.m4a": 30, "audio-10.m4a": 5]
+        let state = try await ready.processingState(styleID: "C-red-line", allowAdditions: true, language: nil,
+                                                    duration: { durations[$0.lastPathComponent]! })
+        #expect(state.audio.map(\.lastPathComponent) == names)
+        #expect(state.markers == [.pause(at: 1, duration: 1), .pause(at: 32, duration: 1)])
+    }
+
     // MARK: - Run board
 
     @Test func readyLecturesAreRestoredAndDeletedOnesDropped() async throws {

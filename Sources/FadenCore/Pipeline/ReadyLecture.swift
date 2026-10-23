@@ -4,10 +4,15 @@ import os
 public enum ReadyLectureError: Error, Equatable, LocalizedError {
     /// A recorded part's audio file is gone; carries its name.
     case deleted(String)
+    /// Recorded parts in the folder that the lecture doesn't list yet; carries their names. Include them first.
+    case unlisted([String])
 
     public var errorDescription: String? {
         switch self {
         case .deleted(let name): "Can't process: \(name) was deleted"
+        case .unlisted(let names):
+            "Can't process: \(names.joined(separator: ", ")) \(names.count == 1 ? "is" : "are") not in this lecture yet. "
+                + "Include \(names.count == 1 ? "it" : "them") on the review card first."
         }
     }
 }
@@ -76,11 +81,38 @@ public struct ReadyLecture: Equatable, Sendable {
         try save()
     }
 
+    /// Recorded part files in the folder (`audio.m4a`, `audio-N.m4a`) that the lecture doesn't list, in part
+    /// order; e.g. a part Stop saved whose state couldn't be written. Process refuses to run while there are any,
+    /// so no recording is silently left out.
+    public func unlistedParts() -> [URL] {
+        let listed = Set(parts.map(\.file))
+        return folder.audioPartURLs().filter { !listed.contains($0.lastPathComponent) }
+    }
+
+    /// Adds `files` (part files in this folder) to the lecture without pauses, and saves it. The parts are kept
+    /// in part-number order, so Process offsets later pauses by the real durations of all earlier parts.
+    public mutating func include(_ files: [URL]) throws {
+        var all = parts
+        for file in files where !all.contains(where: { $0.file == file.lastPathComponent }) {
+            all.append(RecordedPart(file: file.lastPathComponent, pauses: []))
+        }
+        let ordered = all.enumerated().sorted {
+            let a = LectureFolder.partNumber(of: $0.element.file) ?? .max
+            let b = LectureFolder.partNumber(of: $1.element.file) ?? .max
+            return (a, $0.offset) < (b, $1.offset)
+        }
+        state.parts = ordered.map(\.element)
+        try save()
+    }
+
     /// The state Process runs: every part in order, the attachments, the given settings, and each part's pauses
     /// on the joined timeline, offset by the real durations (`duration`) of the parts before it.
-    /// Throws `ReadyLectureError.deleted` when a part's audio file is gone.
+    /// Throws `ReadyLectureError.deleted` when a part's audio file is gone, and `.unlisted` while the folder holds
+    /// recorded parts the lecture doesn't list.
     public func processingState(styleID: String, allowAdditions: Bool, language: String?,
                                 duration: Pipeline.DurationLoader) async throws -> PipelineState {
+        let unlisted = unlistedParts()
+        guard unlisted.isEmpty else { throw ReadyLectureError.unlisted(unlisted.map(\.lastPathComponent)) }
         let urls = audio
         if let gone = urls.first(where: { !FileManager.default.fileExists(atPath: $0.path) }) {
             throw ReadyLectureError.deleted(gone.lastPathComponent)
