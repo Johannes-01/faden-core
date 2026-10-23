@@ -37,6 +37,16 @@ import Testing
         #expect(store.segments().isEmpty)
     }
 
+    @Test func nextSegmentAfterGapDoesNotOverwrite() throws {
+        let root = try makeTempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = SegmentStore(root: root, sessionID: UUID())
+        _ = store.nextSegmentURL()
+        try Data([1]).write(to: store.dir.appendingPathComponent("seg-0001.caf"))
+        try Data([3]).write(to: store.dir.appendingPathComponent("seg-0003.caf"))
+        #expect(store.nextSegmentURL().lastPathComponent == "seg-0004.caf")
+    }
+
     @Test func segmentsIgnoresOtherFiles() throws {
         let root = try makeTempRoot()
         defer { try? FileManager.default.removeItem(at: root) }

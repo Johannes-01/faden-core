@@ -13,10 +13,15 @@ public struct SegmentStore: Sendable {
         dir = root.appendingPathComponent(sessionID.uuidString, isDirectory: true)
     }
 
-    /// The next free `seg-NNNN.caf` URL. Creates the session directory, not the file.
+    /// The next free `seg-NNNN.caf` URL: one past the highest existing index, so a gap in the
+    /// numbering never leads to an existing segment being overwritten. Creates the session
+    /// directory, not the file.
     public func nextSegmentURL() -> URL {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent(String(format: "seg-%04d.caf", segments().count + 1))
+        let highest = segments()
+            .compactMap { Int($0.deletingPathExtension().lastPathComponent.dropFirst(4)) }
+            .max() ?? 0
+        return dir.appendingPathComponent(String(format: "seg-%04d.caf", highest + 1))
     }
 
     /// Segment files on disk, sorted by name.
