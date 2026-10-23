@@ -22,6 +22,10 @@ public struct PauseRecord: Codable, Equatable, Sendable {
     }
 }
 
+public enum RecordingSessionError: Error, Equatable {
+    case alreadyStopped
+}
+
 public struct RecordingSession: Codable, Equatable, Identifiable, Sendable {
     public var id: UUID
     public var startedAt: Date
@@ -77,6 +81,17 @@ public struct RecordingSession: Codable, Equatable, Identifiable, Sendable {
         if phase == .paused { closeOpenPause(at: now) }
         phase = .stopped
         return true
+    }
+
+    /// Brings the session into `.recording` before capture (re)starts, e.g. for a session
+    /// recovered after a crash: a paused session is resumed (its open pause closed at `now`),
+    /// a recording one is left as is, a stopped one is rejected.
+    public mutating func prepareForRecording(at recordedTime: TimeInterval, now: Date = Date()) throws {
+        switch phase {
+        case .recording: return
+        case .paused: resume(at: recordedTime, now: now)
+        case .stopped: throw RecordingSessionError.alreadyStopped
+        }
     }
 
     private mutating func closeOpenPause(at date: Date) {

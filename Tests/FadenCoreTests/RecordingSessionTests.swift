@@ -143,6 +143,31 @@ import Testing
         #expect(s.pauses.last?.ended == t0.addingTimeInterval(30))
     }
 
+    @Test func prepareForRecordingResumesPausedSession() throws {
+        let t0 = Date(timeIntervalSince1970: 1_000_000)
+        var s = makeSession()
+        _ = s.pause(at: 90, now: t0)
+        try s.prepareForRecording(at: 90, now: t0.addingTimeInterval(600))
+        #expect(s.phase == .recording)
+        #expect(s.pauses == [PauseRecord(at: 90, began: t0, ended: t0.addingTimeInterval(600))])
+    }
+
+    @Test func prepareForRecordingKeepsRecordingSession() throws {
+        var s = makeSession(phase: .recording)
+        let before = s
+        try s.prepareForRecording(at: 42)
+        #expect(s == before)
+    }
+
+    @Test func prepareForRecordingRejectsStoppedSession() {
+        var s = makeSession(phase: .stopped)
+        let before = s
+        #expect(throws: RecordingSessionError.alreadyStopped) {
+            try s.prepareForRecording(at: 0)
+        }
+        #expect(s == before)
+    }
+
     @Test func stopTwiceIsNoop() {
         var s = makeSession()
         let r7 = s.stop()
