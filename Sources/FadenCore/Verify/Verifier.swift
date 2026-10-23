@@ -59,7 +59,7 @@ public enum Verifier {
     }
 
     static func systemPrompt() throws -> String {
-        guard let url = Bundle.module.url(forResource: "verify-system", withExtension: "md", subdirectory: "prompts") else {
+        guard let url = FadenCore.resources.url(forResource: "verify-system", withExtension: "md", subdirectory: "prompts") else {
             throw VerifierError.missingResource("prompts/verify-system.md")
         }
         return try String(contentsOf: url, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)

@@ -40,7 +40,7 @@ public struct StyleStore: Sendable {
     public func installDefaultsIfMissing() throws {
         let fm = FileManager.default
         try fm.createDirectory(at: dir, withIntermediateDirectories: true)
-        let bundled = Bundle.module.urls(forResourcesWithExtension: "md", subdirectory: "styles") ?? []
+        let bundled = FadenCore.resources.urls(forResourcesWithExtension: "md", subdirectory: "styles") ?? []
         for source in bundled {
             let target = dir.appendingPathComponent(source.lastPathComponent)
             if !fm.fileExists(atPath: target.path) {

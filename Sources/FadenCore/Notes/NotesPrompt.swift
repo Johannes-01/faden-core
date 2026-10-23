@@ -59,7 +59,7 @@ public enum NotesPrompt {
         + "or your own examples; leave those out, because the student asked for notes from the sources only."
 
     static func baseSystemPrompt() throws -> String {
-        guard let url = Bundle.module.url(forResource: "notes-system", withExtension: "md", subdirectory: "prompts") else {
+        guard let url = FadenCore.resources.url(forResource: "notes-system", withExtension: "md", subdirectory: "prompts") else {
             throw NotesPromptError.missingResource("prompts/notes-system.md")
         }
         return try String(contentsOf: url, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
