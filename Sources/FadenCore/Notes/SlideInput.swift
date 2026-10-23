@@ -7,21 +7,51 @@ public enum SlideInputError: Error, Equatable {
 
 /// Turns slide PDFs into request content blocks.
 public enum SlideInput {
-    /// Each PDF becomes a `document` block titled with its file name. If the decks together exceed
-    /// `maxTotalBytes`, the largest are sent as extracted text instead until the total fits.
+    /// The default limit on the decks' combined raw file size. PDFs are sent base64-encoded, which is
+    /// about 4/3 of the raw size, and the whole request must stay under the Messages API's 32 MB cap:
+    /// 22 MB raw is about 29.3 MB encoded, leaving room for the transcript, notes and prompt.
+    public static let defaultMaxTotalBytes = 22_000_000
+
+    /// The default limit on the decks' combined page count (the API's PDF page limit per request).
+    public static let defaultMaxTotalPages = 600
+
+    /// Each PDF becomes a `document` block titled with its file name. While the decks sent as PDF
+    /// together exceed `maxTotalBytes` (raw file bytes), the largest by size is sent as extracted text
+    /// instead; then, while they exceed `maxTotalPages`, the one with the most pages is. Text-only decks
+    /// count their text's bytes and no pages.
     /// The last block is marked for caching, so re-runs and the verify call can reuse the prefix.
-    public static func blocks(for pdfs: [URL], maxTotalBytes: Int = 30_000_000) throws -> [ContentBlock] {
+    public static func blocks(for pdfs: [URL],
+                              maxTotalBytes: Int = defaultMaxTotalBytes,
+                              maxTotalPages: Int = defaultMaxTotalPages) throws -> [ContentBlock] {
         let datas = try pdfs.map { try Data(contentsOf: $0) }
+        let pageCounts = try zip(pdfs, datas).map { url, data in
+            guard let document = PDFDocument(data: data) else {
+                throw SlideInputError.unreadablePDF(url.lastPathComponent)
+            }
+            return document.pageCount
+        }
         var blocks = zip(pdfs, datas).map { url, data in
             ContentBlock.pdf(base64: data.base64EncodedString(), title: url.lastPathComponent, cache: false)
         }
 
-        var total = datas.reduce(0) { $0 + $1.count }
-        let largestFirst = datas.indices.sorted { datas[$0].count > datas[$1].count }
-        for i in largestFirst where total > maxTotalBytes {
+        var asPDF = Set(pdfs.indices)
+        var totalBytes = datas.reduce(0) { $0 + $1.count }
+        var totalPages = pageCounts.reduce(0, +)
+        while true {
+            let next: Int?
+            if totalBytes > maxTotalBytes {
+                next = asPDF.max { datas[$0].count < datas[$1].count }
+            } else if totalPages > maxTotalPages {
+                next = asPDF.max { pageCounts[$0] < pageCounts[$1] }
+            } else {
+                next = nil
+            }
+            guard let i = next else { break }
             let text = "Slides \(pdfs[i].lastPathComponent) (text only):\n" + (try pageText(pdfs[i]))
             blocks[i] = .text(text, cache: false)
-            total += text.utf8.count - datas[i].count
+            asPDF.remove(i)
+            totalBytes += text.utf8.count - datas[i].count
+            totalPages -= pageCounts[i]
         }
 
         if let last = blocks.indices.last {
@@ -30,12 +60,16 @@ public enum SlideInput {
         return blocks
     }
 
+    /// Marks pages without a text layer (e.g. scanned or image-only), so the model doesn't invent content.
+    static let noTextMarker = "(no extractable text)"
+
     static func pageText(_ url: URL) throws -> String {
         guard let document = PDFDocument(url: url) else {
             throw SlideInputError.unreadablePDF(url.lastPathComponent)
         }
         return (0..<document.pageCount).map { i in
-            "--- Slide \(i + 1) ---\n" + (document.page(at: i)?.string ?? "")
+            let text = (document.page(at: i)?.string ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            return "--- Slide \(i + 1) ---\n" + (text.isEmpty ? noTextMarker : text)
         }.joined(separator: "\n\n")
     }
 }

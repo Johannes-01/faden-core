@@ -95,6 +95,17 @@ import Testing
         #expect(throws: StyleStoreError.malformed("X-bad")) { try store.resolve(id: "X-bad", hasSlides: true) }
     }
 
+    @Test func leadingByteOrderMarkIsIgnored() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("F-bom.md")
+        try (Data([0xEF, 0xBB, 0xBF]) + Data("---\r\nname: F · BOM\r\n---\r\nBody\r\n".utf8)).write(to: url)
+
+        let style = try StyleStore(dir: dir).resolve(id: "F-bom", hasSlides: true)
+        #expect(style == NoteStyle(id: "F-bom", name: "F · BOM", requiresSlides: false, fallbackID: nil, prompt: "Body"))
+        #expect(try StyleStore.parse(id: "G", text: "\u{FEFF}---\nname: G\n---\nBody").name == "G")
+    }
+
     @Test func resolveThrowsForUnknownID() throws {
         let dir = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: dir) }

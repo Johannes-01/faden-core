@@ -29,7 +29,7 @@ public enum NotesPrompt {
     public static func request(_ i: NotesInputs) throws -> MessageRequest {
         var system = try baseSystemPrompt() + "\n\n## Style\n" + i.style.prompt
         if !i.allowAdditions {
-            system += "\n\nDo not add explanations, examples or context of your own; omit 💡 entirely."
+            system += "\n\n" + noAdditionsRule
         }
         if let code = i.languageOverride, !code.isEmpty {
             system += "\n\n" + languageInstruction(code)
@@ -52,6 +52,11 @@ public enum NotesPrompt {
             fallbacks: "default",
             betaHeaders: ["server-side-fallback-2026-07-01"])
     }
+
+    /// Appended when additions are off. It comes after the style, so it overrides style rules that ask for 💡.
+    static let noAdditionsRule = "Do not add explanations, examples or context of your own; omit 💡 entirely. "
+        + "This overrides any instruction above that asks for 💡 content, such as likely exam questions "
+        + "or your own examples; leave those out, because the student asked for notes from the sources only."
 
     static func baseSystemPrompt() throws -> String {
         guard let url = Bundle.module.url(forResource: "notes-system", withExtension: "md", subdirectory: "prompts") else {

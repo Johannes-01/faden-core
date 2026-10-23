@@ -79,9 +79,11 @@ public struct StyleStore: Sendable {
         return try Self.parse(id: id, text: text)
     }
 
-    /// Parses `---` / `key: value` lines / `---` followed by the prompt body. Unknown keys are ignored.
+    /// Parses `---` / `key: value` lines / `---` followed by the prompt body. Unknown keys are ignored;
+    /// a leading byte order mark (as some Windows editors write) is skipped.
     static func parse(id: String, text: String) throws -> NoteStyle {
-        let lines = text.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: "\n")
+        let unmarked = text.hasPrefix("\u{FEFF}") ? String(text.dropFirst()) : text
+        let lines = unmarked.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: "\n")
         guard lines.first?.trimmingCharacters(in: .whitespaces) == "---",
               let close = lines.dropFirst().firstIndex(where: { $0.trimmingCharacters(in: .whitespaces) == "---" })
         else { throw StyleStoreError.malformed(id) }

@@ -14,7 +14,8 @@ import Testing
         return dir
     }
 
-    /// Writes a PDF with one page per string, each drawn as real (extractable) text.
+    /// Writes a PDF with one page per string, each drawn as real (extractable) text; an empty string
+    /// gives a page with only a filled rectangle.
     private func makePDF(_ pages: [String], named name: String, in dir: URL) throws -> URL {
         let url = dir.appendingPathComponent(name)
         var box = CGRect(x: 0, y: 0, width: 400, height: 300)
@@ -22,6 +23,13 @@ import Testing
         let font = CTFontCreateWithName("Helvetica" as CFString, 18, nil)
         for text in pages {
             ctx.beginPDFPage(nil)
+            guard !text.isEmpty else {
+                // An image-only page: a drawn shape, no text layer.
+                ctx.setFillColor(CGColor(red: 0.2, green: 0.4, blue: 0.8, alpha: 1))
+                ctx.fill(CGRect(x: 50, y: 50, width: 300, height: 200))
+                ctx.endPDFPage()
+                continue
+            }
             let line = CTLineCreateWithAttributedString(
                 NSAttributedString(string: text, attributes: [.init(kCTFontAttributeName as String): font]))
             ctx.textPosition = CGPoint(x: 20, y: 150)
@@ -90,6 +98,14 @@ import Testing
         #expect((json["output_config"] as? [String: Any])?["effort"] as? String == "high")
         #expect(json["thinking"] == nil)
         #expect(json["temperature"] == nil)
+        #expect(json["top_p"] == nil)
+        #expect(json["top_k"] == nil)
+        #expect(json["tool_choice"] == nil)
+        let raw = try #require(String(data: try JSONEncoder().encode(request), encoding: .utf8))
+        #expect(!raw.contains("budget_tokens"))
+        let messages = try #require(json["messages"] as? [[String: Any]])
+        #expect(messages.count == 1)
+        #expect(messages.first?["role"] as? String == "user")
         #expect(request.betaHeaders == ["server-side-fallback-2026-07-01"])
 
         let content = try userContent(request)
@@ -142,9 +158,43 @@ import Testing
         #expect((content.first?["text"] as? String)?.hasSuffix("\nPrüfung: Übertragung") == true)
     }
 
+    @Test func baseSystemPromptHasLabelRules() throws {
+        let base = try NotesPrompt.baseSystemPrompt()
+        for label in ["`📄`", "`🗣`", "`💡`", "`✍️`"] {
+            #expect(base.contains(label), "missing label \(label)")
+        }
+        #expect(base.contains("The first line is `# <lecture title>`"))
+        #expect(base.contains("`📄 Folie 12`"))
+        #expect(base.contains("`🗣 [00:23:14]`"))
+    }
+
     @Test func additionsOffAddsRule() throws {
         let system = try systemText(try NotesPrompt.request(inputs(allowAdditions: false)))
-        #expect(system.hasSuffix("Do not add explanations, examples or context of your own; omit 💡 entirely."))
+        #expect(system.hasSuffix("STYLE BODY\n\n" + NotesPrompt.noAdditionsRule))
+        #expect(NotesPrompt.noAdditionsRule.hasPrefix(
+            "Do not add explanations, examples or context of your own; omit 💡 entirely. "
+            + "This overrides any instruction above that asks for 💡 content, such as likely exam questions "
+            + "or your own examples; leave those out"))
+    }
+
+    @Test func additionsOffRuleComesAfterStylesThatAskForAdditions() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = StyleStore(dir: dir)
+        try store.installDefaultsIfMissing()
+
+        for id in ["A-slide-by-slide", "C-red-line"] {
+            let style = try store.resolve(id: id, hasSlides: true)
+            #expect(style.prompt.contains("💡"), "\(id) no longer asks for 💡 content")
+            let request = try NotesPrompt.request(NotesInputs(
+                transcript: transcript, slides: [], userNotes: nil, style: style,
+                allowAdditions: false, languageOverride: "de"))
+            let system = try systemText(request)
+            let styleEnd = try #require(system.range(of: style.prompt)).upperBound
+            let rule = try #require(system.range(of: NotesPrompt.noAdditionsRule))
+            #expect(rule.lowerBound > styleEnd)
+            #expect(system.hasSuffix(NotesPrompt.noAdditionsRule + "\n\nWrite the notes in German."))
+        }
     }
 
     @Test(arguments: [
@@ -185,6 +235,52 @@ import Testing
         }
         #expect(title == "small.pdf")
         #expect(pdfCache)
+    }
+
+    @Test func tooManyPagesDegradeDecksWithMostPages() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let short = try makePDF(["S1", "S2"], named: "short.pdf", in: dir)
+        let long = try makePDF(["L1", "L2", "L3"], named: "long.pdf", in: dir)
+        let medium = try makePDF(["M1", "M2", "M3"].map { $0 + String(repeating: " padding", count: 20) },
+                                 named: "medium.pdf", in: dir)
+
+        // 8 pages, limit 4: both 3-page decks go to text (8 → 5 → 2), the 2-page deck stays a PDF.
+        let blocks = try SlideInput.blocks(for: [short, long, medium], maxTotalBytes: .max, maxTotalPages: 4)
+        let kinds = blocks.map { block -> String in
+            switch block {
+            case .pdf(_, let title, _): "pdf \(title)"
+            case .text(let text, _): text.components(separatedBy: "\n").first ?? ""
+            }
+        }
+        #expect(kinds == ["pdf short.pdf", "Slides long.pdf (text only):", "Slides medium.pdf (text only):"])
+
+        // 7 pages, limit 5: one 3-page deck to text is enough.
+        let fewer = try SlideInput.blocks(for: [short, long, short], maxTotalBytes: .max, maxTotalPages: 5)
+        #expect(fewer.map { if case .pdf = $0 { true } else { false } } == [true, false, true])
+
+        // Exactly at the limit: nothing degrades.
+        let atLimit = try SlideInput.blocks(for: [short, long], maxTotalBytes: .max, maxTotalPages: 5)
+        #expect(atLimit.allSatisfy { if case .pdf = $0 { true } else { false } })
+    }
+
+    @Test func imageOnlyPageIsMarkedAsHavingNoText() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let deck = try makePDF(["Handshake basics", ""], named: "scan.pdf", in: dir)
+
+        let blocks = try SlideInput.blocks(for: [deck], maxTotalBytes: 0)
+        guard case .text(let text, _) = try #require(blocks.first) else {
+            Issue.record("expected the deck as text, got \(blocks)")
+            return
+        }
+        #expect(text == "Slides scan.pdf (text only):\n--- Slide 1 ---\nHandshake basics\n\n--- Slide 2 ---\n(no extractable text)")
+    }
+
+    @Test func defaultLimitsLeaveRoomUnderTheRequestCap() {
+        #expect(SlideInput.defaultMaxTotalBytes == 22_000_000)
+        #expect(SlideInput.defaultMaxTotalBytes * 4 / 3 < 32_000_000)
+        #expect(SlideInput.defaultMaxTotalPages == 600)
     }
 
     @Test func decksWithinLimitStayPDFs() throws {
