@@ -14,11 +14,12 @@ import Testing
     }
 
     /// A lecture folder with `audio.m4a` and a `.faden/state.json`.
-    private func makeLecture(in course: URL, title: String, placeholder: Bool = false) throws -> LectureFolder {
+    private func makeLecture(in course: URL, title: String, placeholder: Bool = false,
+                             markers: [TranscriptMarker] = []) throws -> LectureFolder {
         let folder = try LectureFolder.create(in: course, date: Date(timeIntervalSince1970: 1_792_000_000), title: title)
         try Data("audio".utf8).write(to: folder.audioURL)
         var state = PipelineState(audio: [folder.audioURL], styleID: "C-red-line", allowAdditions: true,
-                                  titleIsPlaceholder: placeholder)
+                                  titleIsPlaceholder: placeholder, markers: markers)
         state.stage = .done
         try JSONEncoder().encode(state).write(to: folder.stateURL.creatingParent())
         return folder
@@ -69,6 +70,22 @@ import Testing
         let plan = try ReprocessPlanner.plan(request([lecture.audioURL], course: course), now: Self.now)
 
         #expect(plan.state.titleIsPlaceholder)
+    }
+
+    @Test func plannerKeepsPauseMarkersForSameAudio() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let course = root.appendingPathComponent("Course", isDirectory: true)
+        let pauses: [TranscriptMarker] = [.pause(at: 600, duration: 300)]
+        let lecture = try makeLecture(in: course, title: "Week 3", markers: pauses)
+
+        let same = try ReprocessPlanner.plan(request([lecture.audioURL], course: course, force: true), now: Self.now)
+        #expect(same.state.markers == pauses)
+
+        let memo = root.appendingPathComponent("memo.m4a")
+        try Data("memo".utf8).write(to: memo)
+        let changed = try ReprocessPlanner.plan(request([lecture.audioURL, memo], course: course), now: Self.now)
+        #expect(changed.state.markers.isEmpty)
     }
 
     @Test func plannerCopiesImportedAudio() throws {

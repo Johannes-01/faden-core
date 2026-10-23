@@ -30,6 +30,10 @@ public actor Pipeline {
     private let ledger: CostLedger
     private let now: @Sendable () -> Date
     private let duration: DurationLoader
+    /// True while `run` or `retry` is working; a second call meanwhile returns `current` unchanged.
+    private var isRunning = false
+    /// The state of the run in progress, or of the last one.
+    private var current: PipelineState?
 
     static let draftName = "draft-notes.md"
 
@@ -54,31 +58,23 @@ public actor Pipeline {
     }
 
     /// Runs from `state.stage` (a finished or failed state starts over at transcribing) until done or failed.
+    /// While another run is in progress it returns that run's current state and does nothing.
     public func run(_ state: PipelineState) async -> PipelineState {
+        guard !isRunning else { return current ?? state }
+        isRunning = true
+        defer { isRunning = false }
         var s = state
         if s.stage == .done || s.stage == .failed { s.stage = .transcribing }
-        s.error = nil
-        s.failedStage = nil
-        while s.stage != .done && s.stage != .failed {
-            let stage = s.stage
-            do {
-                try persist(s)
-                continuation.yield(stage)
-                s = try await perform(stage, s)
-            } catch {
-                s.stage = .failed
-                s.failedStage = stage
-                s.error = Self.message(for: error)
-            }
-        }
-        // Best effort: the outcome is already on disk (notes) or in `s.error`.
-        try? persist(s)
-        continuation.yield(s.stage)
-        return s
+        return await execute(s)
     }
 
-    /// Loads `state.json` and resumes at its `failedStage`.
+    /// Loads `state.json` and resumes at its `failedStage`, or at the stage a crash interrupted.
+    /// A finished state, or a failure with no stage to resume, is returned unchanged so nothing is paid twice.
+    /// While another run is in progress it returns that run's current state and does nothing.
     public func retry() async -> PipelineState {
+        if isRunning, let current { return current }
+        isRunning = true
+        defer { isRunning = false }
         let state: PipelineState
         do {
             state = try JSONDecoder().decode(PipelineState.self, from: Data(contentsOf: folder.stateURL))
@@ -88,9 +84,35 @@ public actor Pipeline {
             continuation.yield(.failed)
             return failed
         }
+        if state.stage == .done { return state }
         var resumed = state
-        if state.stage == .failed, let stage = state.failedStage { resumed.stage = stage }
-        return await run(resumed)
+        if state.stage == .failed {
+            guard let stage = state.failedStage else { return state }
+            resumed.stage = stage
+        }
+        return await execute(resumed)
+    }
+
+    private func execute(_ state: PipelineState) async -> PipelineState {
+        var s = state
+        s.error = nil
+        s.failedStage = nil
+        while s.stage != .done && s.stage != .failed {
+            let stage = s.stage
+            do {
+                try checkpoint(s)
+                continuation.yield(stage)
+                s = try await perform(stage, s)
+            } catch {
+                s.stage = .failed
+                s.failedStage = stage
+                s.error = Self.message(for: error)
+            }
+        }
+        // Best effort: the outcome is already on disk (notes) or in `s.error`.
+        try? checkpoint(s)
+        continuation.yield(s.stage)
+        return s
     }
 
     // MARK: - Stages
@@ -173,6 +195,8 @@ public actor Pipeline {
         s.notesCall = call
         record(call)
         s.stage = .verifying
+        // Saved straight away: a crash from here on resumes at verifying and never pays for the notes again.
+        try checkpoint(s)
         return s
     }
 
@@ -183,17 +207,26 @@ public actor Pipeline {
         s.verifyCall = nil
         s.findings = nil
         s.verificationSkipped = nil
+        let result: MessageResult
         do {
             let request = try Verifier.request(notes: notes, transcript: try loadTranscript(), slides: s.slides)
-            let result = try await client.send(request)
-            let call = PaidCall(model: result.model, usage: result.usage)
-            s.verifyCall = call
-            record(call)
+            result = try await client.send(request)
+        } catch {
+            s.verificationSkipped = "skipped (\(Self.skipReason(error)))"
+            s.stage = .saving
+            return s
+        }
+        let call = PaidCall(model: result.model, usage: result.usage)
+        s.verifyCall = call
+        record(call)
+        do {
             s.findings = try Verifier.parse(result.text)
         } catch {
             s.verificationSkipped = "skipped (\(Self.skipReason(error)))"
         }
         s.stage = .saving
+        // Saved straight away: a crash from here on resumes at saving and never pays for the check again.
+        try checkpoint(s)
         return s
     }
 
@@ -232,7 +265,9 @@ public actor Pipeline {
 
     // MARK: - Helpers
 
-    private func persist(_ s: PipelineState) throws {
+    /// Remembers `s` as the current state and writes it to `state.json`.
+    private func checkpoint(_ s: PipelineState) throws {
+        current = s
         try createFadenDirectory()
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]

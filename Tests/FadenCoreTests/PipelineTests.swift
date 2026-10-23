@@ -31,15 +31,46 @@ actor FakeTranscriber: Transcriber {
         segments: [TranscriptSegment(start: 0, end: 5, text: "uh")], markers: [], language: nil, model: "fake-model")
 }
 
-/// Returns scripted results or errors, one per call, in order.
+/// Suspends callers of `wait()` until `open()`.
+actor Gate {
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var isOpen = false
+    private(set) var arrivals = 0
+
+    func wait() async {
+        arrivals += 1
+        guard !isOpen else { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func open() {
+        isOpen = true
+        waiters.forEach { $0.resume() }
+        waiters = []
+    }
+
+    /// Returns once `n` callers have arrived (or after about two seconds).
+    func waitForArrivals(_ n: Int) async {
+        for _ in 0..<200 where arrivals < n {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+    }
+}
+
+/// Returns scripted results or errors, one per call, in order. Call number `gatedCall` waits on `gate`.
 actor FakeClient: MessageSending {
     private var script: [Result<MessageResult, Error>]
     private let onCall: @Sendable (Int) -> Void
+    private let gate: Gate?
+    private let gatedCall: Int
     private(set) var calls = 0
     private(set) var models: [String] = []
 
-    init(_ script: [Result<MessageResult, Error>], onCall: @escaping @Sendable (Int) -> Void = { _ in }) {
+    init(_ script: [Result<MessageResult, Error>], gate: Gate? = nil, gatedCall: Int = 0,
+         onCall: @escaping @Sendable (Int) -> Void = { _ in }) {
         self.script = script
+        self.gate = gate
+        self.gatedCall = gatedCall
         self.onCall = onCall
     }
 
@@ -47,8 +78,10 @@ actor FakeClient: MessageSending {
         calls += 1
         models.append(r.model)
         onCall(calls)
-        guard !script.isEmpty else { throw AnthropicError.network("no scripted result") }
-        return try script.removeFirst().get()
+        let result = script.isEmpty ? nil : script.removeFirst()
+        if calls == gatedCall, let gate { await gate.wait() }
+        guard let result else { throw AnthropicError.network("no scripted result") }
+        return try result.get()
     }
 
     static let notesText = "# Linear Algebra\n\n- 🗣 Eigenvalues describe stretching.\n- 🗣 The determinant is a product.\n"
@@ -219,6 +252,113 @@ actor FakeClient: MessageSending {
         let notes = try String(contentsOf: env.folder.notesURL, encoding: .utf8)
         #expect(notes.contains("> Verification: ok, 1 flagged"))
         #expect(notes.contains("> Cost: $0.08"))
+    }
+
+    @Test func retryAfterSuccessDoesNothing() async throws {
+        let env = try makeEnv()
+        defer { env.cleanup() }
+        let client = FakeClient([FakeClient.notes(), FakeClient.verify(), FakeClient.notes(), FakeClient.verify()])
+        let pipeline = makePipeline(env, transcriber: FakeTranscriber(), client: client)
+        _ = await pipeline.run(makeState(env))
+        let before = try FileManager.default.contentsOfDirectory(atPath: env.folder.url.path).sorted()
+
+        let state = await pipeline.retry()
+
+        #expect(state.stage == .done)
+        #expect(await client.calls == 2)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: env.folder.url.path).sorted() == before)
+    }
+
+    @Test func retryOfFailureWithoutStageDoesNothing() async throws {
+        let env = try makeEnv()
+        defer { env.cleanup() }
+        var state = makeState(env)
+        state.stage = .failed
+        state.error = "Could not read the saved progress"
+        try JSONEncoder().encode(state).write(to: env.folder.stateURL.creatingParent())
+        let client = FakeClient([FakeClient.notes(), FakeClient.verify()])
+        let transcriber = FakeTranscriber()
+
+        let result = await makePipeline(env, transcriber: transcriber, client: client).retry()
+
+        #expect(result == state)
+        #expect(await client.calls == 0)
+        #expect(await transcriber.calls == 0)
+    }
+
+    @Test func retryResumesAtVerifying() async throws {
+        let env = try makeEnv()
+        defer { env.cleanup() }
+        try JSONEncoder().encode(FakeTranscriber.speech).write(to: env.folder.transcriptMetaURL.creatingParent())
+        let fadenDir = env.folder.stateURL.deletingLastPathComponent()
+        try FakeClient.notesText.write(to: fadenDir.appendingPathComponent("draft-notes.md"),
+                                       atomically: true, encoding: .utf8)
+        var state = makeState(env)
+        state.stage = .failed
+        state.failedStage = .verifying
+        state.transcriptionModel = "fake-model"
+        state.draftNotesFile = "draft-notes.md"
+        state.notesCall = PaidCall(model: "claude-opus-5-5", usage: Usage(inputTokens: 10_000, outputTokens: 2_000))
+        try JSONEncoder().encode(state).write(to: env.folder.stateURL)
+        let client = FakeClient([FakeClient.verify()])
+        let transcriber = FakeTranscriber()
+
+        let result = await makePipeline(env, transcriber: transcriber, client: client).retry()
+
+        #expect(result.stage == .done)
+        #expect(await client.calls == 1)
+        #expect(await client.models == ["claude-haiku-5-5"])
+        #expect(await transcriber.calls == 0)
+        let notes = try String(contentsOf: env.folder.notesURL, encoding: .utf8)
+        #expect(notes.contains("> Verification: ok, 1 flagged"))
+        // $0.08 notes + $0.00125 check, and both calls' tokens.
+        #expect(notes.contains("> Cost: $0.08 (22000 in / 2100 out tokens)"))
+    }
+
+    @Test func overlappingRunAndRetryDoNothing() async throws {
+        let env = try makeEnv()
+        defer { env.cleanup() }
+        let gate = Gate()
+        let client = FakeClient([FakeClient.notes(), FakeClient.verify()], gate: gate, gatedCall: 1)
+        let transcriber = FakeTranscriber()
+        let pipeline = makePipeline(env, transcriber: transcriber, client: client)
+        let first = Task { await pipeline.run(makeState(env)) }
+        await gate.waitForArrivals(1)
+
+        let second = await pipeline.run(makeState(env))
+        let retried = await pipeline.retry()
+
+        #expect(second.stage == .writingNotes)
+        #expect(retried.stage == .writingNotes)
+        #expect(await client.calls == 1)
+        #expect(await transcriber.calls == 1)
+        await gate.open()
+        #expect(await first.value.stage == .done)
+        #expect(await client.calls == 2)
+        let notes = try FileManager.default.contentsOfDirectory(atPath: env.folder.url.path)
+            .filter { $0.hasPrefix("notes") }
+        #expect(notes == ["notes.md"])
+    }
+
+    @Test func notesCallIsPersistedBeforeVerifying() async throws {
+        let env = try makeEnv()
+        defer { env.cleanup() }
+        let gate = Gate()
+        let client = FakeClient([FakeClient.notes(), FakeClient.verify()], gate: gate, gatedCall: 2)
+        let pipeline = makePipeline(env, transcriber: FakeTranscriber(), client: client)
+        let run = Task { await pipeline.run(makeState(env)) }
+        await gate.waitForArrivals(1)
+
+        let saved = try JSONDecoder().decode(PipelineState.self, from: Data(contentsOf: env.folder.stateURL))
+
+        #expect(saved.stage == .verifying)
+        #expect(saved.draftNotesFile == "draft-notes.md")
+        #expect(saved.notesCall?.model == "claude-opus-5-5")
+        await gate.open()
+        #expect(await run.value.stage == .done)
+        let done = try JSONDecoder().decode(PipelineState.self, from: Data(contentsOf: env.folder.stateURL))
+        #expect(done.verifyCall?.model == "claude-haiku-5-5")
+        #expect(done.findings?.count == 1)
     }
 
     @Test func verifyFailureStillSaves() async throws {

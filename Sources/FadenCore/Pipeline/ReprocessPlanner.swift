@@ -36,11 +36,13 @@ public enum ReprocessPlanner {
 
         let folder: LectureFolder
         let titleIsPlaceholder: Bool
+        var previous: PipelineState?
         let firstParent = first.deletingLastPathComponent()
         if LectureFolder.isLectureFolder(firstParent), isSameDirectory(firstParent.deletingLastPathComponent(), r.courseFolder) {
             folder = LectureFolder(url: firstParent)
+            previous = previousState(of: folder)
             // Keep the existing folder's name unless it still carries a placeholder.
-            titleIsPlaceholder = r.slides.isEmpty && (previousState(of: folder)?.titleIsPlaceholder ?? false)
+            titleIsPlaceholder = r.slides.isEmpty && (previous?.titleIsPlaceholder ?? false)
         } else {
             let title = r.slides.first.map(title(ofSlide:)) ?? "Lecture"
             folder = try LectureFolder.create(in: r.courseFolder, date: now, title: title)
@@ -58,10 +60,12 @@ public enum ReprocessPlanner {
             }
         }
 
+        // The recording's pauses live only in the state; keep them while the audio is the same.
+        let markers = previous.flatMap { samePaths($0.audio, audio) ? $0.markers : nil } ?? []
         let state = PipelineState(
             audio: audio, slides: r.slides, userNotes: r.userNotes, styleID: r.styleID,
             allowAdditions: r.allowAdditions, forceRetranscribe: r.forceRetranscribe,
-            titleIsPlaceholder: titleIsPlaceholder)
+            titleIsPlaceholder: titleIsPlaceholder, markers: markers)
         return (folder, state)
     }
 
@@ -89,6 +93,11 @@ public enum ReprocessPlanner {
     private static func previousState(of folder: LectureFolder) -> PipelineState? {
         guard let data = try? Data(contentsOf: folder.stateURL) else { return nil }
         return try? JSONDecoder().decode(PipelineState.self, from: data)
+    }
+
+    private static func samePaths(_ a: [URL], _ b: [URL]) -> Bool {
+        func paths(_ urls: [URL]) -> [String] { urls.map { $0.resolvingSymlinksInPath().standardizedFileURL.path } }
+        return paths(a) == paths(b)
     }
 
     private static func isSameDirectory(_ a: URL, _ b: URL) -> Bool {
