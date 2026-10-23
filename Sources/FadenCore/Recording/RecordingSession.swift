@@ -39,6 +39,9 @@ public struct RecordingSession: Codable, Equatable, Identifiable, Sendable {
     public var notesFile: URL?
     public var pauses: [PauseRecord]
     public var segmentCount: Int
+    /// The existing lecture this recording continues ("Continue recording"); Stop saves its audio there as
+    /// the next part. nil starts a new lecture, as in session files written before parts existed.
+    public var lectureFolder: URL?
 
     public init(
         id: UUID = UUID(),
@@ -48,7 +51,8 @@ public struct RecordingSession: Codable, Equatable, Identifiable, Sendable {
         slides: [URL] = [],
         notesFile: URL? = nil,
         pauses: [PauseRecord] = [],
-        segmentCount: Int = 0
+        segmentCount: Int = 0,
+        lectureFolder: URL? = nil
     ) {
         self.id = id
         self.startedAt = startedAt
@@ -58,6 +62,7 @@ public struct RecordingSession: Codable, Equatable, Identifiable, Sendable {
         self.notesFile = notesFile
         self.pauses = pauses
         self.segmentCount = segmentCount
+        self.lectureFolder = lectureFolder
     }
 
     /// recording -> paused. Returns false and changes nothing otherwise.

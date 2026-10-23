@@ -23,15 +23,18 @@ public enum StopFlowError: Error, Equatable, LocalizedError {
 }
 
 /// The file side of Stop and of recovering an interrupted recording. Everything here keeps the
-/// "never lose a recording" rule: segments are deleted only once `audio.m4a` is in the lecture folder.
+/// "never lose a recording" rule: segments are deleted only once the audio is in the lecture folder.
 public enum StopFlow {
     /// Joins `segments` into the `.m4a` at `output` and returns the ones it skipped; see `AudioFinalizer.finalize`.
     public typealias Finalize = @Sendable (_ segments: [URL], _ output: URL) async throws -> [URL]
 
     public struct Outcome: Sendable, Equatable {
         public let folder: LectureFolder
-        /// The folder name is the `"Lecture HH-mm"` placeholder, not a slide title.
+        /// The folder name is the `"Lecture HH-mm"` placeholder, not a slide title. For a continued lecture,
+        /// what its saved state says (false when it has none).
         public let titleIsPlaceholder: Bool
+        /// The saved audio of this part: `audio.m4a` in a new lecture, the next free `audio-N.m4a` in a continued one.
+        public let audio: URL
         /// Where the segments the finaliser skipped now are: in the lecture's `.faden/damaged/`, or still in
         /// the segment directory if moving them failed. Empty when every segment was used.
         public let damaged: [URL]
@@ -63,6 +66,10 @@ public enum StopFlow {
     /// the lecture folder in the session's course folder, moves the audio to `audio.m4a`, marks the
     /// session stopped and only then deletes the segment directory.
     ///
+    /// A session that continues a lecture (`lectureFolder`) saves into that folder instead, as its next part
+    /// (`audio-2.m4a`, `audio-3.m4a`, ...); no earlier part is ever overwritten. If that folder no longer
+    /// exists, a new lecture is created as for any other session, so the audio is never lost.
+    ///
     /// `session.json` reads `.stopped` only once `audio.m4a` is in place; until then it keeps the
     /// caller's phase (`.finishing` after `AudioRecorder.stop()`), so `SegmentStore.unfinished` still
     /// lists the session if the process dies mid-save.
@@ -88,10 +95,20 @@ public enum StopFlow {
         }
         guard fm.fileExists(atPath: temp.path) else { throw StopFlowError.noFinalAudio }
 
-        let (title, isPlaceholder) = title(slides: slides, startedAt: session.startedAt)
-        let folder = try LectureFolder.create(in: session.courseFolder, date: session.startedAt, title: title)
-        try fm.moveItem(at: temp, to: folder.audioURL)
-        guard fm.fileExists(atPath: folder.audioURL.path) else { throw StopFlowError.audioNotDelivered }
+        let folder: LectureFolder
+        let isPlaceholder: Bool
+        if let existing = session.lectureFolder, fm.fileExists(atPath: existing.path) {
+            folder = LectureFolder(url: existing)
+            isPlaceholder = PipelineState.saved(in: folder)?.titleIsPlaceholder ?? false
+        } else {
+            let (title, placeholder) = title(slides: slides, startedAt: session.startedAt)
+            folder = try LectureFolder.create(in: session.courseFolder, date: session.startedAt, title: title)
+            isPlaceholder = placeholder
+        }
+        // `moveItem` never replaces an existing file, and `nextAudioURL` names a free one.
+        let audio = folder.nextAudioURL()
+        try fm.moveItem(at: temp, to: audio)
+        guard fm.fileExists(atPath: audio.path) else { throw StopFlowError.audioNotDelivered }
 
         // Skipped segments may still hold audio: keep them with the lecture. If any can't be moved, the
         // segment directory isn't deleted.
@@ -109,7 +126,7 @@ public enum StopFlow {
         } catch {
             log.error("Cleaning up the segments of \(session.id) failed: \(error)")
         }
-        return Outcome(folder: folder, titleIsPlaceholder: isPlaceholder, damaged: damaged)
+        return Outcome(folder: folder, titleIsPlaceholder: isPlaceholder, audio: audio, damaged: damaged)
     }
 
     /// Moves each skipped segment into `folder.damagedURL` and returns where each one is now; a segment
@@ -119,7 +136,7 @@ public enum StopFlow {
         let fm = FileManager.default
         try? fm.createDirectory(at: folder.damagedURL, withIntermediateDirectories: true)
         return skipped.map { url in
-            let target = folder.damagedURL.appendingPathComponent(url.lastPathComponent)
+            let target = uniqueDamagedURL(for: url, in: folder)
             do {
                 try fm.moveItem(at: url, to: target)
                 return target
@@ -128,6 +145,20 @@ public enum StopFlow {
                 return url
             }
         }
+    }
+
+    /// `seg-0001.caf` in the lecture's damaged folder, or `seg-0001 (2).caf`, ... when an earlier part kept one
+    /// of that name.
+    private static func uniqueDamagedURL(for segment: URL, in folder: LectureFolder) -> URL {
+        let base = segment.deletingPathExtension().lastPathComponent
+        let ext = segment.pathExtension
+        var candidate = folder.damagedURL.appendingPathComponent(segment.lastPathComponent)
+        var n = 2
+        while FileManager.default.fileExists(atPath: candidate.path) {
+            candidate = folder.damagedURL.appendingPathComponent("\(base) (\(n)).\(ext)")
+            n += 1
+        }
+        return candidate
     }
 
     /// A session recovered in `.recording` (the app died while recording) or `.finishing` (it stopped

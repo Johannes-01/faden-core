@@ -1,7 +1,22 @@
 import Foundation
 
 public enum Stage: String, Codable, Sendable {
+    /// Recorded and saved, not processed yet: nothing runs (or is paid for) until the user presses Process.
+    case ready
     case transcribing, writingNotes, verifying, saving, done, failed
+}
+
+/// One recorded part of a lecture that is ready to process: its audio file in the lecture folder and its
+/// pauses on the part's own timeline. Process places the pauses on the joined timeline.
+public struct RecordedPart: Codable, Equatable, Sendable {
+    /// The file name inside the lecture folder, e.g. `audio-2.m4a`.
+    public var file: String
+    public var pauses: [TranscriptMarker]
+
+    public init(file: String, pauses: [TranscriptMarker]) {
+        self.file = file
+        self.pauses = pauses
+    }
 }
 
 /// One paid API call, kept so a retry can still price it in the notes header.
@@ -42,6 +57,8 @@ public struct PipelineState: Codable, Equatable, Sendable {
     public var titleIsPlaceholder: Bool
     /// Recording pauses on the concatenated timeline, applied after concatenation.
     public var markers: [TranscriptMarker]
+    /// The recorded parts while the lecture is `.ready`, in order; nil otherwise and in older state files.
+    public var parts: [RecordedPart]?
 
     /// Results of the paid stages, kept so a retry never pays for them again.
     public var notesCall: PaidCall?
@@ -85,10 +102,10 @@ extension PipelineState {
     }
 
     /// The stage `Pipeline.retry` resumes at: the failed stage, or the stage a crash interrupted.
-    /// nil when there is nothing to resume (done, or failed without a stage).
+    /// nil when there is nothing to resume (ready, done, or failed without a stage).
     public var resumeStage: Stage? {
         switch stage {
-        case .done: nil
+        case .ready, .done: nil
         case .failed: failedStage
         default: stage
         }

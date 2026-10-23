@@ -37,6 +37,37 @@ public struct LectureFolder: Sendable, Equatable {
         return LectureFolder(url: target)
     }
 
+    /// The lecture's recorded parts in order: `audio.m4a` (part 1), then `audio-2.m4a`, `audio-3.m4a`, ...
+    public func audioPartURLs() -> [URL] {
+        let files = (try? FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil)) ?? []
+        return files
+            .compactMap { file in Self.partNumber(of: file.lastPathComponent).map { (number: $0, url: file) } }
+            .sorted { $0.number < $1.number }
+            .map(\.url)
+    }
+
+    /// Where the next recorded part goes: `audio.m4a` for the first, otherwise one past the highest part
+    /// (`audio-2.m4a`, `audio-3.m4a`, ...), so a gap never leads back to an earlier name. Never an existing file.
+    public func nextAudioURL() -> URL {
+        let highest = audioPartURLs().compactMap { Self.partNumber(of: $0.lastPathComponent) }.max() ?? 0
+        var n = highest + 1
+        while true {
+            let candidate = n == 1 ? audioURL : url.appendingPathComponent("audio-\(n).m4a")
+            if !FileManager.default.fileExists(atPath: candidate.path) { return candidate }
+            n += 1
+        }
+    }
+
+    /// 1 for `audio.m4a`, N for `audio-N.m4a` (N ≥ 2), nil for other names.
+    static func partNumber(of name: String) -> Int? {
+        if name == "audio.m4a" { return 1 }
+        guard name.hasPrefix("audio-"), name.hasSuffix(".m4a") else { return nil }
+        let digits = name.dropFirst(6).dropLast(4)
+        guard !digits.isEmpty, digits.allSatisfy(\.isASCII), digits.allSatisfy(\.isNumber),
+              let n = Int(digits), n >= 2 else { return nil }
+        return n
+    }
+
     public static func sanitise(_ title: String) -> String {
         let replaced = title
             .replacingOccurrences(of: "/", with: "-")

@@ -72,6 +72,15 @@ public struct RunBoard: Equatable, Sendable {
         dropHiddenRuns()
     }
 
+    /// Lists `folder` at the top as ready to process (recorded, not processed). An idle entry for it, or for
+    /// `previous` (its name before a rename), is replaced. `error` says why Process couldn't start.
+    public mutating func ready(_ folder: LectureFolder, replacing previous: LectureFolder? = nil, error: String? = nil) {
+        let replaced = [folder] + (previous.map { [$0] } ?? [])
+        runs.removeAll { run in !run.isRunning && replaced.contains { Self.sameFolder(run.folder, $0) } }
+        runs.insert(Run(id: UUID(), folder: folder, stage: .ready, error: error, isRunning: false, canResume: false), at: 0)
+        dropHiddenRuns()
+    }
+
     /// Progress from the run's pipeline.
     public mutating func update(_ id: UUID, stage: Stage) {
         guard let i = runs.firstIndex(where: { $0.id == id }) else { return }
@@ -79,7 +88,6 @@ public struct RunBoard: Equatable, Sendable {
         runs[i].error = nil
     }
 
-    /// The run's outcome; `folder` may differ from the start when saving renamed it.
     /// The run's outcome; `folder` may differ from the start when saving renamed it. `canResume` says
     /// whether a failure has a stage to retry from; `notes` is the file a finished run saved.
     public mutating func finish(_ id: UUID, folder: LectureFolder, stage: Stage, error: String?,
@@ -95,7 +103,7 @@ public struct RunBoard: Equatable, Sendable {
         dropHiddenRuns()
     }
 
-    /// Forgets a failed run (the user dismissed it). Files are never touched; a running run stays.
+    /// Forgets a failed or ready run (the user dismissed it). Files are never touched; a running run stays.
     public mutating func dismiss(_ id: UUID) {
         runs.removeAll { $0.id == id && !$0.isRunning }
     }
@@ -113,8 +121,8 @@ public struct RunBoard: Equatable, Sendable {
     }
 
     /// Rebuilds the board at launch from saved folder paths. Each folder whose `.faden/state.json` is
-    /// readable and not done shows as a failed run that Retry resumes; deleted or finished folders are
-    /// dropped.
+    /// readable and not done shows as a failed run that Retry resumes, or, when it was never processed, as
+    /// ready to process; deleted or finished folders are dropped.
     public static func restored(paths: [String]) -> RunBoard {
         var seen = Set<String>()
         let runs = paths.compactMap { path -> Run? in
@@ -122,6 +130,9 @@ public struct RunBoard: Equatable, Sendable {
             guard seen.insert(folder.url.standardizedFileURL.path).inserted,
                   let state = PipelineState.saved(in: folder), state.stage != .done
             else { return nil }
+            if state.stage == .ready {
+                return Run(id: UUID(), folder: folder, stage: .ready, error: nil, isRunning: false, canResume: false)
+            }
             let error = state.stage == .failed ? state.error : interruptedMessage
             return Run(id: UUID(), folder: folder, stage: .failed, error: error, isRunning: false,
                        canResume: state.resumeStage != nil)

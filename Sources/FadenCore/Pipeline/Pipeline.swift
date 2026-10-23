@@ -61,7 +61,7 @@ public actor Pipeline {
         try await AVURLAsset(url: url).load(.duration).seconds
     }
 
-    /// Runs from `state.stage` (a finished or failed state starts over at transcribing) until done or failed.
+    /// Runs from `state.stage` (a ready, finished or failed state starts at transcribing) until done or failed.
     /// A state that carries a reusable paid draft (see `PipelineState.carryingPaidDraft`) resumes from it,
     /// so the notes aren't paid for twice. While another run is in progress it returns that run's current
     /// state and does nothing.
@@ -71,7 +71,7 @@ public actor Pipeline {
         defer { isRunning = false }
         if let gone = folderGone(state) { return gone }
         var s = state
-        if s.stage == .done || s.stage == .failed { s.stage = .transcribing }
+        if s.stage == .ready || s.stage == .done || s.stage == .failed { s.stage = .transcribing }
         if s.stage == .transcribing, let resume = paidDraftStage(s) { s.stage = resume }
         return await execute(s)
     }
@@ -89,7 +89,8 @@ public actor Pipeline {
     }
 
     /// Loads `state.json` and resumes at its `failedStage`, or at the stage a crash interrupted.
-    /// A finished state, or a failure with no stage to resume, is returned unchanged so nothing is paid twice.
+    /// A finished state, or a failure with no stage to resume, is returned unchanged so nothing is paid twice;
+    /// so is a ready one, which only Process starts.
     /// While another run is in progress it returns that run's current state and does nothing.
     public func retry() async -> PipelineState {
         if isRunning, let current { return current }
@@ -105,7 +106,7 @@ public actor Pipeline {
             continuation.yield(.failed)
             return failed
         }
-        if state.stage == .done { return state }
+        if state.stage == .done || state.stage == .ready { return state }
         var resumed = state
         if state.stage == .failed {
             guard let stage = state.failedStage else { return state }
@@ -130,6 +131,7 @@ public actor Pipeline {
         var s = state
         s.error = nil
         s.failedStage = nil
+        if s.stage == .ready { s.stage = .transcribing }
         // Checked before anything is paid for: a deleted input file is never silently dropped.
         if let deleted = s.deletedInputMessage(
             startingAt: s.stage, transcriptReusable: s.stage == .transcribing && reusableTranscript(for: s) != nil,
@@ -166,7 +168,7 @@ public actor Pipeline {
         case .writingNotes: try await writeNotes(state)
         case .verifying: try await verify(state)
         case .saving: try save(state)
-        case .done, .failed: state
+        case .ready, .done, .failed: state
         }
     }
 
