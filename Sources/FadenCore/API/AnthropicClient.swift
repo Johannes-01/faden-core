@@ -59,6 +59,7 @@ public struct AnthropicClient: Sendable {
     static let endpoint = URL(string: "https://api.anthropic.com/v1/messages")!
     static let apiVersion = "2026-10-21"
     static let maxAttempts = 3
+    static let maxRetryAfter: Double = 60
     static let backoff: [Duration] = [.seconds(2), .seconds(8), .seconds(20)]
 
     private let apiKey: String
@@ -104,8 +105,8 @@ public struct AnthropicClient: Sendable {
     }
 
     private func delay(forFailedAttempt attempt: Int, response: HTTPURLResponse?) -> Duration {
-        if let value = response?.value(forHTTPHeaderField: "retry-after"), let secs = Double(value), secs >= 0 {
-            return .seconds(secs)
+        if let value = response?.value(forHTTPHeaderField: "retry-after"), let secs = Double(value), secs.isFinite, secs >= 0 {
+            return .seconds(min(secs, Self.maxRetryAfter))
         }
         return Self.backoff[min(attempt, Self.backoff.count - 1)]
     }
@@ -133,7 +134,8 @@ public struct AnthropicClient: Sendable {
                 data = d
                 http = h
             } catch let error as URLError {
-                if attempt < Self.maxAttempts, error.code != .cancelled {
+                if error.code == .cancelled || Task.isCancelled { throw CancellationError() }
+                if attempt < Self.maxAttempts {
                     try await sleep(delay(forFailedAttempt: attempt - 1, response: nil))
                     continue
                 }
@@ -193,7 +195,8 @@ public struct AnthropicClient: Sendable {
                 bytes = b
                 http = h
             } catch let error as URLError {
-                if attempt < Self.maxAttempts, error.code != .cancelled {
+                if error.code == .cancelled || Task.isCancelled { throw CancellationError() }
+                if attempt < Self.maxAttempts {
                     try await sleep(delay(forFailedAttempt: attempt - 1, response: nil))
                     continue
                 }
@@ -273,12 +276,14 @@ public struct AnthropicClient: Sendable {
         } catch is CancellationError {
             throw CancellationError()
         } catch {
+            if (error as? URLError)?.code == .cancelled || Task.isCancelled { throw CancellationError() }
             throw AnthropicError.network(error.localizedDescription)
         }
 
         // A refusal can arrive with a clean message_stop; check it before demanding completeness.
         if stopReason == "refusal" { throw AnthropicError.refused(category: category) }
-        guard finished else { throw AnthropicError.streamIncomplete }
+        // message_stop without a stop_reason means a message_delta was lost or malformed.
+        guard finished, !stopReason.isEmpty else { throw AnthropicError.streamIncomplete }
         try checkStop(stopReason, category: category)
         return MessageResult(text: text, model: model, stopReason: stopReason, usage: usage)
     }

@@ -29,7 +29,7 @@ let package = Package(
             name: "Faden",
             dependencies: ["FadenCore", "FadenTranscription"]
         ),
-        .testTarget(name: "FadenCoreTests", dependencies: ["FadenCore"]),
+        .testTarget(name: "FadenCoreTests", dependencies: ["FadenCore"], exclude: ["Fixtures"]),
         .testTarget(name: "FadenIntegrationTests", dependencies: ["FadenCore", "FadenTranscription"]),
     ]
 )

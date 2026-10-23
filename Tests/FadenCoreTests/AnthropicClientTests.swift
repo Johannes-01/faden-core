@@ -8,6 +8,7 @@ struct StubResponse: Sendable {
     var status: Int = 200
     var headers: [String: String] = [:]
     var body: Data = Data()
+    var failAfterBody: Bool = false
 }
 
 final class StubURLProtocol: URLProtocol, @unchecked Sendable {
@@ -59,7 +60,14 @@ final class StubURLProtocol: URLProtocol, @unchecked Sendable {
         let resp = HTTPURLResponse(url: request.url!, statusCode: next.status, httpVersion: "HTTP/1.1", headerFields: next.headers)!
         client?.urlProtocol(self, didReceive: resp, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: next.body)
-        client?.urlProtocolDidFinishLoading(self)
+        if next.failAfterBody {
+            // Delay so the response head and partial body are consumed before the failure lands.
+            DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) { [self] in
+                client?.urlProtocol(self, didFailWithError: URLError(.networkConnectionLost))
+            }
+        } else {
+            client?.urlProtocolDidFinishLoading(self)
+        }
     }
 
     override func stopLoading() {}
@@ -139,6 +147,7 @@ struct AnthropicClientTests {
         #expect(obj["fallbacks"] as? String == "default")
         #expect(obj["output_config"] as? [String: String] == ["effort": "high"])
         #expect(obj["max_tokens"] as? Int == 64000)
+        #expect(String(decoding: StubURLProtocol.bodies[0], as: UTF8.self).contains("\"role\":\"user\""))
         #expect(obj["stream"] as? Bool == true)
         for forbidden in ["temperature", "top_p", "top_k", "thinking", "tool_choice", "budget_tokens", "betaHeaders", "beta_headers"] {
             #expect(obj[forbidden] == nil)
@@ -262,6 +271,54 @@ struct AnthropicClientTests {
         }
         #expect(StubURLProtocol.requests.count == 3)
         #expect(sleeps.values == [.seconds(7), .seconds(8)])
+    }
+
+    @Test func retryAfterIsClampedTo60Seconds() async throws {
+        let err = json(#"{"type":"error","error":{"type":"rate_limit_error","message":"x"}}"#)
+        StubURLProtocol.reset([
+            StubResponse(status: 429, headers: ["retry-after": "99999"], body: err),
+            StubResponse(body: try fixture("sse-notes-ok")),
+        ])
+        let sleeps = SleepLog()
+        _ = try await client(sleeps: sleeps).send(streamingRequest())
+        #expect(sleeps.values == [.seconds(60)])
+    }
+
+    @Test func messageStopWithoutStopReasonThrowsIncomplete() async throws {
+        let body = String(decoding: try fixture("sse-notes-ok"), as: UTF8.self)
+            .replacingOccurrences(of: #""delta":{"stop_reason":"end_turn","stop_sequence":null}"#, with: #""delta":{}"#)
+        StubURLProtocol.reset([StubResponse(body: json(body))])
+        await #expect(throws: AnthropicError.streamIncomplete) {
+            _ = try await client().send(streamingRequest())
+        }
+    }
+
+    @Test func midStreamNetworkErrorDoesNotRetry() async throws {
+        let partial = """
+        event: message_start
+        data: {"type":"message_start","message":{"model":"m","usage":{"input_tokens":1}}}
+
+        event: content_block_delta
+        data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}
+
+
+        """
+        // URLSession.AsyncBytes only hands out the stream once its first buffer fills, so pad
+        // with an SSE comment line to get response bytes consumed before the failure.
+        let padded = partial + ": " + String(repeating: "x", count: 40_000) + "\n\n"
+        StubURLProtocol.reset([
+            StubResponse(body: json(padded), failAfterBody: true),
+            StubResponse(body: try fixture("sse-notes-ok")),
+        ])
+        let sleeps = SleepLog()
+        do {
+            _ = try await client(sleeps: sleeps).send(streamingRequest())
+            Issue.record("expected a throw")
+        } catch let e as AnthropicError {
+            #expect(e == .streamIncomplete || { if case .network = e { true } else { false } }())
+        }
+        #expect(StubURLProtocol.requests.count == 1)
+        #expect(sleeps.values.isEmpty)
     }
 
     @Test func nonRetryableHttpErrorMapsBody() async throws {
