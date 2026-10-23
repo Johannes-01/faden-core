@@ -25,9 +25,30 @@ import Testing
         return folder
     }
 
-    private func request(_ recordings: [URL], course: URL, slides: [URL] = [], force: Bool = false) -> ReprocessRequest {
+    private func request(_ recordings: [URL], course: URL, slides: [URL] = [], force: Bool = false,
+                         styleID: String = "B-by-topic", additions: Bool = false,
+                         language: String? = nil) -> ReprocessRequest {
         ReprocessRequest(recordings: recordings, courseFolder: course, slides: slides, userNotes: nil,
-                         styleID: "B-by-topic", allowAdditions: false, forceRetranscribe: force)
+                         styleID: styleID, allowAdditions: additions, language: language, forceRetranscribe: force)
+    }
+
+    private static let notesCall = PaidCall(model: "claude-opus-5-5", usage: Usage(inputTokens: 10, outputTokens: 2))
+    private static let verifyCall = PaidCall(model: "claude-haiku-5-5", usage: Usage(inputTokens: 12, outputTokens: 1))
+
+    /// A lecture whose saved state holds a paid draft made with style B, no additions and German.
+    private func makeLectureWithDraft(in course: URL, stage: Stage = .done) throws -> LectureFolder {
+        let folder = try LectureFolder.create(in: course, date: Date(timeIntervalSince1970: 1_792_000_000), title: "Week 3")
+        try Data("audio".utf8).write(to: folder.audioURL)
+        var state = PipelineState(audio: [folder.audioURL], styleID: "B-by-topic", allowAdditions: false,
+                                  language: "de", transcriptionModel: "whisper-x")
+        state.stage = stage
+        state.draftNotesFile = "draft-notes.md"
+        state.styleName = "B"
+        state.notesCall = Self.notesCall
+        state.verifyCall = Self.verifyCall
+        state.findings = [Finding(quote: "q", reason: "r")]
+        try JSONEncoder().encode(state).write(to: folder.stateURL.creatingParent())
+        return folder
     }
 
     private func makePDF(at url: URL, title: String?) throws {
@@ -163,6 +184,71 @@ import Testing
 
         #expect(plan.folder.url.lastPathComponent == "2026-10-23 Digital Product Engineering")
         #expect(plan.state.titleIsPlaceholder == false)
+    }
+
+    @Test func plannerPassesTheLanguage() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let course = root.appendingPathComponent("Course", isDirectory: true)
+        let lecture = try makeLecture(in: course, title: "Week 3")
+        let memo = root.appendingPathComponent("memo.m4a")
+        try Data("memo".utf8).write(to: memo)
+
+        #expect(try ReprocessPlanner.plan(request([lecture.audioURL], course: course, language: "de"), now: Self.now)
+            .state.language == "de")
+        #expect(try ReprocessPlanner.plan(request([memo], course: course, language: "en"), now: Self.now)
+            .state.language == "en")
+        #expect(try ReprocessPlanner.plan(request([memo], course: course), now: Self.now).state.language == nil)
+    }
+
+    @Test func plannerCarriesAPaidDraftForTheSameInputs() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let course = root.appendingPathComponent("Course", isDirectory: true)
+        for stage in [Stage.done, .failed, .verifying] {
+            let lecture = try makeLectureWithDraft(in: course, stage: stage)
+            defer { try? FileManager.default.removeItem(at: lecture.url) }
+
+            let plan = try ReprocessPlanner.plan(request([lecture.audioURL], course: course, language: "de"), now: Self.now)
+
+            #expect(plan.state.stage == .transcribing)
+            #expect(plan.state.draftNotesFile == "draft-notes.md")
+            #expect(plan.state.notesCall == Self.notesCall)
+            #expect(plan.state.verifyCall == Self.verifyCall)
+            #expect(plan.state.findings == [Finding(quote: "q", reason: "r")])
+            #expect(plan.state.styleName == "B")
+            #expect(plan.state.transcriptionModel == "whisper-x")
+        }
+    }
+
+    @Test func plannerDropsThePaidDraftWhenAnInputChanged() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let course = root.appendingPathComponent("Course", isDirectory: true)
+        let lecture = try makeLectureWithDraft(in: course)
+        let memo = root.appendingPathComponent("memo.m4a")
+        try Data("memo".utf8).write(to: memo)
+        let slide = root.appendingPathComponent("deck.pdf")
+        try makePDF(at: slide, title: nil)
+        let audio = [lecture.audioURL]
+
+        let changed = [
+            request(audio, course: course, styleID: "C-red-line", language: "de"),
+            request(audio, course: course, additions: true, language: "de"),
+            request(audio, course: course, language: "en"),
+            request(audio, course: course, language: nil),
+            request(audio, course: course, force: true, language: "de"),
+            request(audio, course: course, slides: [slide], language: "de"),
+            request(audio + [memo], course: course, language: "de"),
+        ]
+        for r in changed {
+            let plan = try ReprocessPlanner.plan(r, now: Self.now)
+            #expect(plan.state.draftNotesFile == nil)
+            #expect(plan.state.notesCall == nil)
+            #expect(plan.state.verifyCall == nil)
+            #expect(plan.state.findings == nil)
+            #expect(plan.state.styleName == nil)
+        }
     }
 
     @Test func plannerRejectsEmptyRecordings() throws {

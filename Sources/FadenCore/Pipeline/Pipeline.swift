@@ -58,14 +58,29 @@ public actor Pipeline {
     }
 
     /// Runs from `state.stage` (a finished or failed state starts over at transcribing) until done or failed.
-    /// While another run is in progress it returns that run's current state and does nothing.
+    /// A state that carries a reusable paid draft (see `PipelineState.carryingPaidDraft`) resumes from it,
+    /// so the notes aren't paid for twice. While another run is in progress it returns that run's current
+    /// state and does nothing.
     public func run(_ state: PipelineState) async -> PipelineState {
         guard !isRunning else { return current ?? state }
         isRunning = true
         defer { isRunning = false }
         var s = state
         if s.stage == .done || s.stage == .failed { s.stage = .transcribing }
+        if s.stage == .transcribing, let resume = paidDraftStage(s) { s.stage = resume }
         return await execute(s)
+    }
+
+    /// Where a state carrying a paid draft resumes: at saving when the check was paid for too, otherwise
+    /// at verifying. nil when the draft can't be reused: re-transcription is forced, the draft or the
+    /// transcript is missing, or the transcript came from another speech model than this run's.
+    private func paidDraftStage(_ s: PipelineState) -> Stage? {
+        let fm = FileManager.default
+        guard !s.forceRetranscribe, s.notesCall != nil, let name = s.draftNotesFile,
+              fm.fileExists(atPath: draftURL(name).path), fm.fileExists(atPath: folder.transcriptMetaURL.path),
+              s.transcriptionModel == transcriber.modelName
+        else { return nil }
+        return s.verifyCall != nil ? .saving : .verifying
     }
 
     /// Loads `state.json` and resumes at its `failedStage`, or at the stage a crash interrupted.

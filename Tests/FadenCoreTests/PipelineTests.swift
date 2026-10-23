@@ -270,6 +270,75 @@ actor FakeClient: MessageSending {
         #expect(notes.contains(" · style C · "))
     }
 
+    /// "Process again" with the inputs of a paid draft: the planner carries the draft's fields over.
+    private func processAgainState(_ env: Env, from saved: PipelineState) -> PipelineState {
+        var s = makeState(env)
+        s.language = saved.language
+        return s.carryingPaidDraft(from: saved)
+    }
+
+    @Test func processAgainResumesFromAPaidDraftWithoutPaying() async throws {
+        let env = try makeEnv()
+        defer { env.cleanup() }
+        let first = await makePipeline(env, transcriber: FakeTranscriber(),
+                                       client: FakeClient([FakeClient.notes(), FakeClient.verify()])).run(makeState(env))
+        #expect(first.stage == .done)
+
+        let transcriber = FakeTranscriber()
+        let client = FakeClient([])
+        let pipeline = makePipeline(env, transcriber: transcriber, client: client)
+        let again = await pipeline.run(processAgainState(env, from: first))
+
+        #expect(again.stage == .done)
+        #expect(await client.calls == 0)
+        #expect(await transcriber.calls == 0)
+        #expect(try env.ledgerLines().count == 2)
+        let names = try FileManager.default.contentsOfDirectory(atPath: env.folder.url.path)
+        let rerun = try #require(names.first { $0.hasPrefix("notes (re-run ") })
+        let notes = try String(contentsOf: env.folder.url.appendingPathComponent(rerun), encoding: .utf8)
+        #expect(notes.contains("> Verification: ok, 1 flagged"))
+        #expect(notes.contains("> Cost: $0.08"))
+    }
+
+    @Test func processAgainOnlyRunsTheCheckWhenItHadNoCall() async throws {
+        let env = try makeEnv()
+        defer { env.cleanup() }
+        let first = await makePipeline(env, transcriber: FakeTranscriber(), client: FakeClient([
+            FakeClient.notes(), .failure(AnthropicError.http(status: 500, type: nil, message: nil)),
+        ])).run(makeState(env))
+        #expect(first.verificationSkipped == "skipped (HTTP 500)")
+
+        let client = FakeClient([FakeClient.verify()])
+        let again = await makePipeline(env, transcriber: FakeTranscriber(), client: client)
+            .run(processAgainState(env, from: first))
+
+        #expect(again.stage == .done)
+        #expect(await client.models == ["claude-haiku-5-5"])
+    }
+
+    @Test func processAgainPaysWhenTheDraftCantBeReused() async throws {
+        let env = try makeEnv()
+        defer { env.cleanup() }
+        let first = await makePipeline(env, transcriber: FakeTranscriber(),
+                                       client: FakeClient([FakeClient.notes(), FakeClient.verify()])).run(makeState(env))
+
+        // Another speech model: the transcript and so the draft are redone.
+        let other = FakeClient([FakeClient.notes(), FakeClient.verify()])
+        let otherModel = await makePipeline(env, transcriber: FakeTranscriber(modelName: "other-model"), client: other)
+            .run(processAgainState(env, from: first))
+        #expect(otherModel.stage == .done)
+        #expect(await other.calls == 2)
+
+        // The draft file is gone.
+        try FileManager.default.removeItem(at: env.folder.stateURL.deletingLastPathComponent()
+            .appendingPathComponent("draft-notes.md"))
+        let missing = FakeClient([FakeClient.notes(), FakeClient.verify()])
+        let noDraft = await makePipeline(env, transcriber: FakeTranscriber(modelName: "other-model"), client: missing)
+            .run(processAgainState(env, from: otherModel))
+        #expect(noDraft.stage == .done)
+        #expect(await missing.calls == 2)
+    }
+
     @Test func retryAfterSuccessDoesNothing() async throws {
         let env = try makeEnv()
         defer { env.cleanup() }

@@ -94,3 +94,31 @@ extension PipelineState {
         }
     }
 }
+
+extension PipelineState {
+    /// This fresh state with `previous`'s paid draft and check carried over, when `previous` made them from
+    /// the same audio, slides, notes file, style, 💡 setting and language, and no re-transcription is asked
+    /// for. `Pipeline.run` then resumes from the draft instead of paying for the notes again (it also checks
+    /// the draft file and the speech model). Otherwise the state is returned unchanged.
+    public func carryingPaidDraft(from previous: PipelineState) -> PipelineState {
+        guard previous.draftNotesFile != nil, previous.notesCall != nil, !forceRetranscribe,
+              Self.samePaths(previous.audio, audio), Self.samePaths(previous.slides, slides),
+              Self.samePaths(previous.userNotes.map { [$0] } ?? [], userNotes.map { [$0] } ?? []),
+              previous.styleID == styleID, previous.allowAdditions == allowAdditions, previous.language == language
+        else { return self }
+        var s = self
+        s.transcriptionModel = previous.transcriptionModel
+        s.draftNotesFile = previous.draftNotesFile
+        s.styleName = previous.styleName
+        s.notesCall = previous.notesCall
+        s.verifyCall = previous.verifyCall
+        s.findings = previous.findings
+        s.verificationSkipped = previous.verificationSkipped
+        return s
+    }
+
+    static func samePaths(_ a: [URL], _ b: [URL]) -> Bool {
+        func paths(_ urls: [URL]) -> [String] { urls.map { $0.resolvingSymlinksInPath().standardizedFileURL.path } }
+        return paths(a) == paths(b)
+    }
+}

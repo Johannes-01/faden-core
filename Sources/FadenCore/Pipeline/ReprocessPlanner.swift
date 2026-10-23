@@ -9,16 +9,19 @@ public struct ReprocessRequest: Sendable {
     public var userNotes: URL?
     public var styleID: String
     public var allowAdditions: Bool
+    /// `nil` means auto-detect; otherwise an ISO code (`de` or `en`).
+    public var language: String?
     public var forceRetranscribe: Bool
 
     public init(recordings: [URL], courseFolder: URL, slides: [URL], userNotes: URL?, styleID: String,
-                allowAdditions: Bool, forceRetranscribe: Bool) {
+                allowAdditions: Bool, language: String?, forceRetranscribe: Bool) {
         self.recordings = recordings
         self.courseFolder = courseFolder
         self.slides = slides
         self.userNotes = userNotes
         self.styleID = styleID
         self.allowAdditions = allowAdditions
+        self.language = language
         self.forceRetranscribe = forceRetranscribe
     }
 }
@@ -40,7 +43,7 @@ public enum ReprocessPlanner {
         let firstParent = first.deletingLastPathComponent()
         if LectureFolder.isLectureFolder(firstParent), isSameDirectory(firstParent.deletingLastPathComponent(), r.courseFolder) {
             folder = LectureFolder(url: firstParent)
-            previous = previousState(of: folder)
+            previous = PipelineState.saved(in: folder)
             // Keep the existing folder's name unless it still carries a placeholder.
             titleIsPlaceholder = r.slides.isEmpty && (previous?.titleIsPlaceholder ?? false)
         } else {
@@ -61,11 +64,13 @@ public enum ReprocessPlanner {
         }
 
         // The recording's pauses live only in the state; keep them while the audio is the same.
-        let markers = previous.flatMap { samePaths($0.audio, audio) ? $0.markers : nil } ?? []
-        let state = PipelineState(
+        let markers = previous.flatMap { PipelineState.samePaths($0.audio, audio) ? $0.markers : nil } ?? []
+        var state = PipelineState(
             audio: audio, slides: r.slides, userNotes: r.userNotes, styleID: r.styleID,
-            allowAdditions: r.allowAdditions, forceRetranscribe: r.forceRetranscribe,
+            allowAdditions: r.allowAdditions, language: r.language, forceRetranscribe: r.forceRetranscribe,
             titleIsPlaceholder: titleIsPlaceholder, markers: markers)
+        // A draft already paid for with the same inputs is reused, never paid for again.
+        if let previous { state = state.carryingPaidDraft(from: previous) }
         return (folder, state)
     }
 
@@ -88,16 +93,6 @@ public enum ReprocessPlanner {
             n += 1
         }
         return dir.appendingPathComponent(ext.isEmpty ? stem : "\(stem).\(ext)")
-    }
-
-    private static func previousState(of folder: LectureFolder) -> PipelineState? {
-        guard let data = try? Data(contentsOf: folder.stateURL) else { return nil }
-        return try? JSONDecoder().decode(PipelineState.self, from: data)
-    }
-
-    private static func samePaths(_ a: [URL], _ b: [URL]) -> Bool {
-        func paths(_ urls: [URL]) -> [String] { urls.map { $0.resolvingSymlinksInPath().standardizedFileURL.path } }
-        return paths(a) == paths(b)
     }
 
     private static func isSameDirectory(_ a: URL, _ b: URL) -> Bool {
