@@ -13,6 +13,8 @@ public struct LectureFolder: Sendable, Equatable {
     public var audioURL: URL { url.appendingPathComponent("audio.m4a") }
     public var stateURL: URL { fadenDirectory.appendingPathComponent("state.json") }
     public var transcriptMetaURL: URL { fadenDirectory.appendingPathComponent("transcript.json") }
+    /// Recorded segments the finaliser couldn't read, kept rather than deleted.
+    public var damagedURL: URL { fadenDirectory.appendingPathComponent("damaged", isDirectory: true) }
 
     private var fadenDirectory: URL { url.appendingPathComponent(".faden", isDirectory: true) }
 

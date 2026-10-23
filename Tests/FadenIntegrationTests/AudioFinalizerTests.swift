@@ -84,7 +84,8 @@ struct AudioFinalizerTests {
         try say("zwei [[slnc 2600]]", to: seg3)
 
         let output = dir.appendingPathComponent("audio.m4a")
-        try await AudioFinalizer.finalize(segments: [seg1, garbage, seg3], to: output)
+        let skipped = try await AudioFinalizer.finalize(segments: [seg1, garbage, seg3], to: output)
+        #expect(skipped == [garbage])
         #expect(abs(try await duration(of: output) - 6) <= 0.5)
         #expect(FileManager.default.fileExists(atPath: garbage.path))
     }

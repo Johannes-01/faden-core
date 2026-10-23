@@ -47,6 +47,16 @@ import Testing
     /// Writes the segment names into `output`, like a real export would produce a file.
     private static let fakeFinalize: StopFlow.Finalize = { segments, output in
         try Data(segments.map(\.lastPathComponent).joined(separator: ",").utf8).write(to: output)
+        return []
+    }
+
+    /// Like `fakeFinalize`, but reports the segments at `skipped` (0-based) as unreadable and leaves them out.
+    private static func finalizeSkipping(_ skipped: Set<Int>) -> StopFlow.Finalize {
+        { segments, output in
+            let used = segments.enumerated().filter { !skipped.contains($0.offset) }.map(\.element)
+            try Data(used.map(\.lastPathComponent).joined(separator: ",").utf8).write(to: output)
+            return segments.enumerated().filter { skipped.contains($0.offset) }.map(\.element)
+        }
     }
 
     private func tempAudio(in store: SegmentStore) -> [URL] {
@@ -90,6 +100,51 @@ import Testing
         let audio = try String(contentsOf: result.folder.audioURL, encoding: .utf8)
         #expect(audio == "seg-0001.caf,seg-0002.caf")
         #expect(!FileManager.default.fileExists(atPath: env.store.dir.path))
+    }
+
+    @Test func skippedSegmentsAreKeptInTheLectureFolder() async throws {
+        let env = try makeEnv(segments: 3)
+        defer { env.cleanup() }
+        let session = try makeSession(env)
+
+        let result = try await StopFlow.finish(
+            session: session, slides: [], store: env.store, finalize: Self.finalizeSkipping([1]))
+
+        #expect(try String(contentsOf: result.folder.audioURL, encoding: .utf8) == "seg-0001.caf,seg-0003.caf")
+        let damaged = result.folder.url.appendingPathComponent(".faden/damaged/seg-0002.caf")
+        #expect(result.damaged.map(\.lastPathComponent) == ["seg-0002.caf"])
+        #expect(result.damaged.first?.standardizedFileURL == damaged.standardizedFileURL)
+        #expect(try String(contentsOf: damaged, encoding: .utf8) == "segment 1")
+        #expect(!FileManager.default.fileExists(atPath: env.store.dir.path))
+    }
+
+    @Test func finishWithoutSkippedSegmentsReportsNoDamage() async throws {
+        let env = try makeEnv()
+        defer { env.cleanup() }
+        let result = try await StopFlow.finish(
+            session: try makeSession(env), slides: [], store: env.store, finalize: Self.fakeFinalize)
+        #expect(result.damaged.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: result.folder.url.appendingPathComponent(".faden/damaged").path))
+    }
+
+    @Test func segmentsStayWhenSkippedOnesCantBeMoved() async throws {
+        let env = try makeEnv(segments: 2)
+        defer { env.cleanup() }
+        let session = try makeSession(env)
+        // The skipped segment vanishes before it can be moved (as a stand-in for any failed move).
+        let finalize: StopFlow.Finalize = { segments, output in
+            try Data("seg-0001.caf".utf8).write(to: output)
+            return [segments[1].deletingLastPathComponent().appendingPathComponent("seg-0099.caf")]
+        }
+
+        let result = try await StopFlow.finish(session: session, slides: [], store: env.store, finalize: finalize)
+
+        #expect(FileManager.default.fileExists(atPath: result.folder.audioURL.path))
+        // Reported where it is, and the segment directory is kept.
+        #expect(result.damaged.map(\.lastPathComponent) == ["seg-0099.caf"])
+        #expect(result.damaged.first?.deletingLastPathComponent().standardizedFileURL == env.store.dir.standardizedFileURL)
+        #expect(env.store.segments().count == 2)
+        #expect(SegmentStore.unfinished(root: env.store.dir.deletingLastPathComponent()).isEmpty)
     }
 
     @Test func finishWithoutSlidesUsesPlaceholder() async throws {

@@ -25,13 +25,16 @@ public enum StopFlowError: Error, Equatable, LocalizedError {
 /// The file side of Stop and of recovering an interrupted recording. Everything here keeps the
 /// "never lose a recording" rule: segments are deleted only once `audio.m4a` is in the lecture folder.
 public enum StopFlow {
-    /// Joins `segments` into the `.m4a` at `output`; see `AudioFinalizer.finalize`.
-    public typealias Finalize = @Sendable (_ segments: [URL], _ output: URL) async throws -> Void
+    /// Joins `segments` into the `.m4a` at `output` and returns the ones it skipped; see `AudioFinalizer.finalize`.
+    public typealias Finalize = @Sendable (_ segments: [URL], _ output: URL) async throws -> [URL]
 
     public struct Outcome: Sendable, Equatable {
         public let folder: LectureFolder
         /// The folder name is the `"Lecture HH-mm"` placeholder, not a slide title.
         public let titleIsPlaceholder: Bool
+        /// Where the segments the finaliser skipped now are: in the lecture's `.faden/damaged/`, or still in
+        /// the segment directory if moving them failed. Empty when every segment was used.
+        public let damaged: [URL]
     }
 
     public static let defaultFinalize: Finalize = { segments, output in
@@ -77,8 +80,9 @@ public enum StopFlow {
 
         // A unique name: an earlier failed attempt's file is kept, and the finaliser never overwrites.
         let temp = store.dir.appendingPathComponent("finalised-\(UUID().uuidString).m4a")
+        let skipped: [URL]
         do {
-            try await finalize(segments, temp)
+            skipped = try await finalize(segments, temp)
         } catch AudioFinalizer.FinalizeError.noSegments where recordedDuration(of: segments) == 0 {
             throw StopFlowError.unreadableAudio(dir: store.dir)
         }
@@ -89,17 +93,41 @@ public enum StopFlow {
         try fm.moveItem(at: temp, to: folder.audioURL)
         guard fm.fileExists(atPath: folder.audioURL.path) else { throw StopFlowError.audioNotDelivered }
 
+        // Skipped segments may still hold audio: keep them with the lecture. If any can't be moved, the
+        // segment directory isn't deleted.
+        let damaged = keepSkipped(skipped, in: folder)
+        let allMoved = damaged.allSatisfy { $0.deletingLastPathComponent().standardizedFileURL
+            == folder.damagedURL.standardizedFileURL }
+
         // The audio is safe. Mark the session stopped first, so a failed delete can't bring it back
         // as "unfinished" on the next launch.
         var stopped = session
         stopped.stop()
         do {
             try store.save(stopped)
-            try store.discard()
+            if allMoved { try store.discard() }
         } catch {
             log.error("Cleaning up the segments of \(session.id) failed: \(error)")
         }
-        return Outcome(folder: folder, titleIsPlaceholder: isPlaceholder)
+        return Outcome(folder: folder, titleIsPlaceholder: isPlaceholder, damaged: damaged)
+    }
+
+    /// Moves each skipped segment into `folder.damagedURL` and returns where each one is now; a segment
+    /// that can't be moved stays (and is listed) where it was. Nothing is deleted or overwritten.
+    private static func keepSkipped(_ skipped: [URL], in folder: LectureFolder) -> [URL] {
+        guard !skipped.isEmpty else { return [] }
+        let fm = FileManager.default
+        try? fm.createDirectory(at: folder.damagedURL, withIntermediateDirectories: true)
+        return skipped.map { url in
+            let target = folder.damagedURL.appendingPathComponent(url.lastPathComponent)
+            do {
+                try fm.moveItem(at: url, to: target)
+                return target
+            } catch {
+                log.error("Keeping the unreadable segment \(url.lastPathComponent) failed: \(error)")
+                return url
+            }
+        }
     }
 
     /// A session recovered in `.recording` (the app died while recording) or `.finishing` (it stopped
