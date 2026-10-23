@@ -104,6 +104,15 @@ public struct AnthropicClient: Sendable {
         status == 429 || (500...599).contains(status)
     }
 
+    /// Errors where the request can't have reached the API, so a retry can't bill twice. A timeout or a
+    /// dropped connection may come after the server accepted (and billed) the request, so those aren't retried.
+    static func neverReachedServer(_ error: URLError) -> Bool {
+        switch error.code {
+        case .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed, .notConnectedToInternet: true
+        default: false
+        }
+    }
+
     private func delay(forFailedAttempt attempt: Int, response: HTTPURLResponse?) -> Duration {
         if let value = response?.value(forHTTPHeaderField: "retry-after"), let secs = Double(value), secs.isFinite, secs >= 0 {
             return .seconds(min(secs, Self.maxRetryAfter))
@@ -135,7 +144,7 @@ public struct AnthropicClient: Sendable {
                 http = h
             } catch let error as URLError {
                 if error.code == .cancelled || Task.isCancelled { throw CancellationError() }
-                if attempt < Self.maxAttempts {
+                if Self.neverReachedServer(error), attempt < Self.maxAttempts {
                     try await sleep(delay(forFailedAttempt: attempt - 1, response: nil))
                     continue
                 }
@@ -196,7 +205,7 @@ public struct AnthropicClient: Sendable {
                 http = h
             } catch let error as URLError {
                 if error.code == .cancelled || Task.isCancelled { throw CancellationError() }
-                if attempt < Self.maxAttempts {
+                if Self.neverReachedServer(error), attempt < Self.maxAttempts {
                     try await sleep(delay(forFailedAttempt: attempt - 1, response: nil))
                     continue
                 }

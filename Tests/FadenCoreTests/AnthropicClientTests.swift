@@ -9,6 +9,8 @@ struct StubResponse: Sendable {
     var headers: [String: String] = [:]
     var body: Data = Data()
     var failAfterBody: Bool = false
+    /// Fails the request with this error before any response arrives.
+    var failWith: URLError.Code?
 }
 
 final class StubURLProtocol: URLProtocol, @unchecked Sendable {
@@ -55,6 +57,10 @@ final class StubURLProtocol: URLProtocol, @unchecked Sendable {
         }
         guard let next else {
             client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+            return
+        }
+        if let code = next.failWith {
+            client?.urlProtocol(self, didFailWithError: URLError(code))
             return
         }
         let resp = HTTPURLResponse(url: request.url!, statusCode: next.status, httpVersion: "HTTP/1.1", headerFields: next.headers)!
@@ -255,6 +261,34 @@ struct AnthropicClientTests {
         #expect(result.text == "# Wi-Fi Part 4\n")
         #expect(StubURLProtocol.requests.count == 2)
         #expect(sleeps.values == [.seconds(2)])
+    }
+
+    /// The request never reached the server, so nothing was billed: retry.
+    @Test(arguments: [URLError.Code.cannotConnectToHost, .dnsLookupFailed, .notConnectedToInternet, .cannotFindHost])
+    func retriesWhenTheRequestNeverReachedTheServer(_ code: URLError.Code) async throws {
+        for request in [streamingRequest(), jsonRequest()] {
+            let ok = request.stream ? try fixture("sse-notes-ok")
+                : json(#"{"model":"claude-haiku-5-5","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}"#)
+            StubURLProtocol.reset([StubResponse(failWith: code), StubResponse(body: ok)])
+            let sleeps = SleepLog()
+            _ = try await client(sleeps: sleeps).send(request)
+            #expect(StubURLProtocol.requests.count == 2)
+            #expect(sleeps.values == [.seconds(2)])
+        }
+    }
+
+    /// The server may already have received (and billed) the request: don't send it again.
+    @Test(arguments: [URLError.Code.timedOut, .networkConnectionLost, .badServerResponse])
+    func doesNotRetryWhenTheServerMayHaveBilled(_ code: URLError.Code) async throws {
+        for request in [streamingRequest(), jsonRequest()] {
+            StubURLProtocol.reset([StubResponse(failWith: code), StubResponse(body: try fixture("sse-notes-ok"))])
+            let sleeps = SleepLog()
+            await #expect(throws: AnthropicError.self) {
+                _ = try await client(sleeps: sleeps).send(request)
+            }
+            #expect(StubURLProtocol.requests.count == 1)
+            #expect(sleeps.values.isEmpty)
+        }
     }
 
     @Test func retryAfterHeaderIsHonouredAndAttemptsCapped() async throws {
