@@ -1,0 +1,417 @@
+import Foundation
+import Testing
+@testable import FadenCore
+
+/// Counts calls and returns a canned transcript.
+actor FakeTranscriber: Transcriber {
+    nonisolated let modelName: String
+    private let transcript: Transcript
+    private(set) var calls = 0
+
+    init(modelName: String = "fake-model", transcript: Transcript = FakeTranscriber.speech) {
+        self.modelName = modelName
+        self.transcript = transcript
+    }
+
+    func transcribe(audio: URL, language: String?) async throws -> Transcript {
+        calls += 1
+        var t = transcript
+        t.model = modelName
+        return t
+    }
+
+    static let speech = Transcript(
+        segments: [
+            TranscriptSegment(start: 0, end: 30, text: String(repeating: "Eigenvalues describe how a matrix stretches space. ", count: 3)),
+            TranscriptSegment(start: 30, end: 60, text: String(repeating: "The determinant is the product of the eigenvalues. ", count: 3)),
+        ],
+        markers: [], language: "en", model: "fake-model")
+
+    static let silence = Transcript(
+        segments: [TranscriptSegment(start: 0, end: 5, text: "uh")], markers: [], language: nil, model: "fake-model")
+}
+
+/// Returns scripted results or errors, one per call, in order.
+actor FakeClient: MessageSending {
+    private var script: [Result<MessageResult, Error>]
+    private let onCall: @Sendable (Int) -> Void
+    private(set) var calls = 0
+    private(set) var models: [String] = []
+
+    init(_ script: [Result<MessageResult, Error>], onCall: @escaping @Sendable (Int) -> Void = { _ in }) {
+        self.script = script
+        self.onCall = onCall
+    }
+
+    func send(_ r: MessageRequest) async throws -> MessageResult {
+        calls += 1
+        models.append(r.model)
+        onCall(calls)
+        guard !script.isEmpty else { throw AnthropicError.network("no scripted result") }
+        return try script.removeFirst().get()
+    }
+
+    static let notesText = "# Linear Algebra\n\n- 🗣 Eigenvalues describe stretching.\n- 🗣 The determinant is a product.\n"
+
+    static func notes(_ text: String = notesText) -> Result<MessageResult, Error> {
+        .success(MessageResult(text: text, model: "claude-opus-5-5", stopReason: "end_turn",
+                               usage: Usage(inputTokens: 10_000, outputTokens: 2_000)))
+    }
+
+    static func verify(_ json: String = #"{"unsupported":[{"quote":"determinant","reason":"not said"}]}"#)
+        -> Result<MessageResult, Error> {
+        .success(MessageResult(text: json, model: "claude-haiku-5-5", stopReason: "end_turn",
+                               usage: Usage(inputTokens: 12_000, outputTokens: 100)))
+    }
+}
+
+@Suite struct PipelineTests {
+    struct Env {
+        let root: URL
+        let course: URL
+        let folder: LectureFolder
+        let styles: StyleStore
+        let ledger: CostLedger
+
+        func cleanup() { try? FileManager.default.removeItem(at: root) }
+
+        func ledgerLines() throws -> [String] {
+            guard FileManager.default.fileExists(atPath: ledger.file.path) else { return [] }
+            return try String(contentsOf: ledger.file, encoding: .utf8).split(separator: "\n").map(String.init)
+        }
+    }
+
+    static let now = Date(timeIntervalSince1970: 1_792_756_800) // 2026-10-23
+
+    private func makeEnv(title: String = "Lecture") throws -> Env {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("faden-pipeline-\(UUID().uuidString)", isDirectory: true)
+        let course = root.appendingPathComponent("Course", isDirectory: true)
+        let folder = try LectureFolder.create(in: course, date: Self.now, title: title)
+        try Data("fake audio".utf8).write(to: folder.audioURL)
+        let styles = StyleStore(dir: root.appendingPathComponent("styles", isDirectory: true))
+        try styles.installDefaultsIfMissing()
+        return Env(root: root, course: course, folder: folder, styles: styles,
+                   ledger: CostLedger(file: root.appendingPathComponent("costs.jsonl")))
+    }
+
+    private func makeState(_ env: Env, audio: [URL]? = nil, placeholder: Bool = false) -> PipelineState {
+        PipelineState(audio: audio ?? [env.folder.audioURL], styleID: "C-red-line", allowAdditions: true,
+                      titleIsPlaceholder: placeholder)
+    }
+
+    private func makePipeline(_ env: Env, folder: LectureFolder? = nil, transcriber: Transcriber,
+                              client: MessageSending) -> Pipeline {
+        Pipeline(folder: folder ?? env.folder, transcriber: transcriber, client: client, styles: env.styles,
+                 ledger: env.ledger, now: { PipelineTests.now }, duration: { _ in 60 })
+    }
+
+    @Test func happyPathWritesNotesWithHeader() async throws {
+        let env = try makeEnv()
+        defer { env.cleanup() }
+        let client = FakeClient([FakeClient.notes(), FakeClient.verify()])
+        let pipeline = makePipeline(env, transcriber: FakeTranscriber(), client: client)
+
+        let state = await pipeline.run(makeState(env))
+
+        #expect(state.stage == .done)
+        #expect(state.error == nil)
+        #expect(state.transcriptionModel == "fake-model")
+        let notes = try String(contentsOf: env.folder.notesURL, encoding: .utf8)
+        let lines = notes.components(separatedBy: "\n")
+        #expect(lines[0] == "# Linear Algebra")
+        #expect(lines[2].hasPrefix("> Generated by Faden"))
+        #expect(lines[2].contains("style C"))
+        #expect(notes.contains("> Verification: ok, 1 flagged"))
+        #expect(notes.contains("- 🗣 The determinant is a product. ⚠️ not found in sources"))
+        #expect(notes.contains("audio audio.m4a"))
+        // Opus 10k in × $4 + 2k out × $20 = $0.08; Haiku 12k × $0.10 + 100 × $0.50 ≈ $0.00125 → $0.08
+        #expect(notes.contains("> Cost: $0.08 (22000 in / 2100 out tokens)"))
+        #expect(try env.ledgerLines().count == 2)
+        #expect(await client.models == ["claude-opus-5-5", "claude-haiku-5-5"])
+        #expect(FileManager.default.fileExists(atPath: env.folder.transcriptURL.path))
+        #expect(FileManager.default.fileExists(atPath: env.folder.transcriptMetaURL.path))
+        let saved = try JSONDecoder().decode(PipelineState.self, from: Data(contentsOf: env.folder.stateURL))
+        #expect(saved.stage == .done)
+    }
+
+    @Test func progressReportsEachStage() async throws {
+        let env = try makeEnv()
+        defer { env.cleanup() }
+        let pipeline = makePipeline(env, transcriber: FakeTranscriber(),
+                                    client: FakeClient([FakeClient.notes(), FakeClient.verify()]))
+        let collector = Task {
+            var seen: [Stage] = []
+            for await stage in pipeline.progress {
+                seen.append(stage)
+                if stage == .done || stage == .failed { break }
+            }
+            return seen
+        }
+        _ = await pipeline.run(makeState(env))
+        #expect(await collector.value == [.transcribing, .writingNotes, .verifying, .saving, .done])
+    }
+
+    @Test func emptyTranscriptSkipsAPI() async throws {
+        let env = try makeEnv()
+        defer { env.cleanup() }
+        let client = FakeClient([FakeClient.notes(), FakeClient.verify()])
+        let pipeline = makePipeline(env, transcriber: FakeTranscriber(transcript: FakeTranscriber.silence),
+                                    client: client)
+
+        let state = await pipeline.run(makeState(env))
+
+        #expect(await client.calls == 0)
+        #expect(state.stage == .failed)
+        #expect(state.failedStage == .transcribing)
+        #expect(state.error == "No speech found")
+        #expect(!FileManager.default.fileExists(atPath: env.folder.notesURL.path))
+    }
+
+    @Test func retryResumesAtNotesStage() async throws {
+        let env = try makeEnv()
+        defer { env.cleanup() }
+        let transcriber = FakeTranscriber()
+        let client = FakeClient([.failure(AnthropicError.streamIncomplete), FakeClient.notes(), FakeClient.verify()])
+        let pipeline = makePipeline(env, transcriber: transcriber, client: client)
+
+        let first = await pipeline.run(makeState(env))
+        #expect(first.stage == .failed)
+        #expect(first.failedStage == .writingNotes)
+        #expect(first.error?.isEmpty == false)
+        #expect(!FileManager.default.fileExists(atPath: env.folder.notesURL.path))
+        let saved = try JSONDecoder().decode(PipelineState.self, from: Data(contentsOf: env.folder.stateURL))
+        #expect(saved.failedStage == .writingNotes)
+
+        let second = await pipeline.retry()
+
+        #expect(second.stage == .done)
+        #expect(second.error == nil)
+        #expect(await transcriber.calls == 1)
+        #expect(FileManager.default.fileExists(atPath: env.folder.notesURL.path))
+    }
+
+    @Test func retryAtSavingNeverCallsNotesModelAgain() async throws {
+        let env = try makeEnv()
+        defer { env.cleanup() }
+        let folderPath = env.folder.url.path
+        // While the verifier is called, make the lecture folder read-only so saving notes.md fails.
+        let client = FakeClient([FakeClient.notes(), FakeClient.verify()]) { call in
+            if call == 2 {
+                try? FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folderPath)
+            }
+        }
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folderPath) }
+        let pipeline = makePipeline(env, transcriber: FakeTranscriber(), client: client)
+
+        let first = await pipeline.run(makeState(env))
+        #expect(first.stage == .failed)
+        #expect(first.failedStage == .saving)
+        #expect(FileManager.default.fileExists(
+            atPath: env.folder.stateURL.deletingLastPathComponent().appendingPathComponent("draft-notes.md").path))
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folderPath)
+        let second = await pipeline.retry()
+
+        #expect(second.stage == .done)
+        #expect(await client.calls == 2)
+        #expect(try env.ledgerLines().count == 2)
+        let notes = try String(contentsOf: env.folder.notesURL, encoding: .utf8)
+        #expect(notes.contains("> Verification: ok, 1 flagged"))
+        #expect(notes.contains("> Cost: $0.08"))
+    }
+
+    @Test func verifyFailureStillSaves() async throws {
+        let env = try makeEnv()
+        defer { env.cleanup() }
+        let client = FakeClient([
+            FakeClient.notes(),
+            .failure(AnthropicError.http(status: 500, type: "api_error", message: "Internal server error")),
+        ])
+        let pipeline = makePipeline(env, transcriber: FakeTranscriber(), client: client)
+
+        let state = await pipeline.run(makeState(env))
+
+        #expect(state.stage == .done)
+        let notes = try String(contentsOf: env.folder.notesURL, encoding: .utf8)
+        #expect(notes.contains("> Verification: skipped"))
+        #expect(!notes.contains("product. ⚠️"))
+        #expect(try env.ledgerLines().count == 1)
+    }
+
+    @Test func unreadableVerifyResponseIsSkippedButBilled() async throws {
+        let env = try makeEnv()
+        defer { env.cleanup() }
+        let client = FakeClient([FakeClient.notes(), FakeClient.verify("not json")])
+        let pipeline = makePipeline(env, transcriber: FakeTranscriber(), client: client)
+
+        let state = await pipeline.run(makeState(env))
+
+        #expect(state.stage == .done)
+        let notes = try String(contentsOf: env.folder.notesURL, encoding: .utf8)
+        #expect(notes.contains("> Verification: skipped ("))
+        #expect(try env.ledgerLines().count == 2)
+    }
+
+    @Test func rerunNeverOverwritesEditedNotes() async throws {
+        let env = try makeEnv()
+        defer { env.cleanup() }
+        let client = FakeClient([FakeClient.notes(), FakeClient.verify(), FakeClient.notes(), FakeClient.verify()])
+        _ = await makePipeline(env, transcriber: FakeTranscriber(), client: client).run(makeState(env))
+        try "my edits".write(to: env.folder.notesURL, atomically: true, encoding: .utf8)
+
+        let state = await makePipeline(env, transcriber: FakeTranscriber(), client: client).run(makeState(env))
+
+        #expect(state.stage == .done)
+        #expect(try String(contentsOf: env.folder.notesURL, encoding: .utf8) == "my edits")
+        let names = try FileManager.default.contentsOfDirectory(atPath: env.folder.url.path)
+        #expect(names.contains { $0.hasPrefix("notes (re-run ") && $0.hasSuffix(").md") })
+    }
+
+    @Test func refusalMessage() async throws {
+        let env = try makeEnv()
+        defer { env.cleanup() }
+        let client = FakeClient([.failure(AnthropicError.refused(category: "cyber"))])
+        let pipeline = makePipeline(env, transcriber: FakeTranscriber(), client: client)
+
+        let state = await pipeline.run(makeState(env))
+
+        #expect(state.stage == .failed)
+        #expect(state.failedStage == .writingNotes)
+        #expect(state.error == "The model declined this lecture (category: cyber)")
+        #expect(state.error?.contains("declined") == true)
+    }
+
+    @Test func missingKeyMessage() async throws {
+        let env = try makeEnv()
+        defer { env.cleanup() }
+        let pipeline = makePipeline(env, transcriber: FakeTranscriber(),
+                                    client: FakeClient([.failure(AnthropicError.missingKey)]))
+        let state = await pipeline.run(makeState(env))
+        #expect(state.error == "Add your Anthropic API key in Settings")
+    }
+
+    @Test func transcriptReusedWhenModelMatches() async throws {
+        let env = try makeEnv()
+        defer { env.cleanup() }
+        var stored = FakeTranscriber.speech
+        stored.model = "fake-model"
+        try JSONEncoder().encode(stored).write(to: env.folder.transcriptMetaURL.creatingParent())
+        let transcriber = FakeTranscriber()
+        let pipeline = makePipeline(env, transcriber: transcriber,
+                                    client: FakeClient([FakeClient.notes(), FakeClient.verify()]))
+
+        let state = await pipeline.run(makeState(env))
+
+        #expect(state.stage == .done)
+        #expect(await transcriber.calls == 0)
+    }
+
+    @Test func transcriptNotReusedForOtherModelOrForced() async throws {
+        let env = try makeEnv()
+        defer { env.cleanup() }
+        var stored = FakeTranscriber.speech
+        stored.model = "older-model"
+        try JSONEncoder().encode(stored).write(to: env.folder.transcriptMetaURL.creatingParent())
+
+        let other = FakeTranscriber()
+        _ = await makePipeline(env, transcriber: other, client: FakeClient([FakeClient.notes(), FakeClient.verify()]))
+            .run(makeState(env))
+        #expect(await other.calls == 1)
+
+        let forced = FakeTranscriber()
+        var state = makeState(env)
+        state.forceRetranscribe = true
+        _ = await makePipeline(env, transcriber: forced, client: FakeClient([FakeClient.notes(), FakeClient.verify()]))
+            .run(state)
+        #expect(await forced.calls == 1)
+    }
+
+    @Test func transcriptNotReusedWhenAudioOutsideFolder() async throws {
+        let env = try makeEnv()
+        defer { env.cleanup() }
+        try JSONEncoder().encode(FakeTranscriber.speech).write(to: env.folder.transcriptMetaURL.creatingParent())
+        let outside = env.root.appendingPathComponent("memo.m4a")
+        try Data("memo".utf8).write(to: outside)
+        let transcriber = FakeTranscriber()
+
+        _ = await makePipeline(env, transcriber: transcriber,
+                               client: FakeClient([FakeClient.notes(), FakeClient.verify()]))
+            .run(makeState(env, audio: [env.folder.audioURL, outside]))
+
+        #expect(await transcriber.calls == 2)
+    }
+
+    @Test func transcriptNotReusedWhenFilesDiffer() async throws {
+        let env = try makeEnv()
+        defer { env.cleanup() }
+        // The stored transcript covers only audio.m4a; a second copied part now joins it.
+        try JSONEncoder().encode(FakeTranscriber.speech).write(to: env.folder.transcriptMetaURL.creatingParent())
+        let second = env.folder.url.appendingPathComponent("audio-2.m4a")
+        try Data("part 2".utf8).write(to: second)
+        let transcriber = FakeTranscriber()
+
+        _ = await makePipeline(env, transcriber: transcriber,
+                               client: FakeClient([FakeClient.notes(), FakeClient.verify()]))
+            .run(makeState(env, audio: [env.folder.audioURL, second]))
+
+        #expect(await transcriber.calls == 2)
+    }
+
+    @Test func partsAreOffsetByDurationAndPausesApplied() async throws {
+        let env = try makeEnv()
+        defer { env.cleanup() }
+        let second = env.folder.url.appendingPathComponent("audio-2.m4a")
+        try Data("part 2".utf8).write(to: second)
+        var state = makeState(env, audio: [env.folder.audioURL, second])
+        state.markers = [.pause(at: 30, duration: 120)]
+        let pipeline = Pipeline(
+            folder: env.folder, transcriber: FakeTranscriber(),
+            client: FakeClient([FakeClient.notes(), FakeClient.verify()]), styles: env.styles, ledger: env.ledger,
+            now: { PipelineTests.now }, duration: { url in url.lastPathComponent == "audio.m4a" ? 2832 : 60 })
+
+        _ = await pipeline.run(state)
+
+        let md = try String(contentsOf: env.folder.transcriptURL, encoding: .utf8)
+        #expect(md.contains("— Part 2: audio-2.m4a starts at [00:47:12] —"))
+        #expect(md.contains("— paused at [00:00:30] for 2 min 0 s —"))
+        let meta = try JSONDecoder().decode(Transcript.self, from: Data(contentsOf: env.folder.transcriptMetaURL))
+        #expect(meta.markers.filter { if case .pause = $0 { true } else { false } }.count == 1)
+    }
+
+    @Test func placeholderTitleRenamesFolderWithoutSlides() async throws {
+        let env = try makeEnv(title: "Lecture")
+        defer { env.cleanup() }
+        let pipeline = makePipeline(env, transcriber: FakeTranscriber(),
+                                    client: FakeClient([FakeClient.notes(), FakeClient.verify()]))
+
+        let state = await pipeline.run(makeState(env, placeholder: true))
+
+        #expect(state.stage == .done)
+        #expect(!state.titleIsPlaceholder)
+        let folder = await pipeline.folder
+        #expect(folder.url.lastPathComponent == "2026-10-23 Linear Algebra")
+        #expect(FileManager.default.fileExists(atPath: folder.notesURL.path))
+        #expect(state.audio == [folder.audioURL])
+        let saved = try JSONDecoder().decode(PipelineState.self, from: Data(contentsOf: folder.stateURL))
+        #expect(saved.stage == .done)
+        #expect(saved.audio == [folder.audioURL])
+    }
+
+    @Test func noRenameWhenTitleIsNotPlaceholder() async throws {
+        let env = try makeEnv(title: "Week 3")
+        defer { env.cleanup() }
+        let pipeline = makePipeline(env, transcriber: FakeTranscriber(),
+                                    client: FakeClient([FakeClient.notes(), FakeClient.verify()]))
+        _ = await pipeline.run(makeState(env, placeholder: false))
+        #expect(await pipeline.folder.url.lastPathComponent == "2026-10-23 Week 3")
+    }
+}
+
+extension URL {
+    /// Creates this file URL's parent directory and returns the URL.
+    func creatingParent() throws -> URL {
+        try FileManager.default.createDirectory(at: deletingLastPathComponent(), withIntermediateDirectories: true)
+        return self
+    }
+}
