@@ -237,9 +237,7 @@ public actor Pipeline {
         let merged = Verifier.merge(findings, into: draft)
         let style = try styles.resolve(id: s.styleID, hasSlides: !s.slides.isEmpty)
 
-        let calls = [s.notesCall, s.verifyCall].compactMap { $0 }
-        let prices = calls.map { Pricing.usd(model: $0.model, usage: $0.usage) }
-        let cost: Double? = prices.contains(where: { $0 == nil }) ? nil : prices.reduce(0) { $0 + ($1 ?? 0) }
+        let cost = s.costUSD
         let header = NotesHeader(
             date: now(), style: Self.shortName(style), slides: s.slides.map(\.lastPathComponent),
             audio: s.audio.map(\.lastPathComponent), userNotes: s.userNotes?.lastPathComponent,
