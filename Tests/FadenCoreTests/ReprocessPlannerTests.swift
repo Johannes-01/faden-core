@@ -36,7 +36,7 @@ import Testing
     private static let verifyCall = PaidCall(model: "claude-haiku-5-5", usage: Usage(inputTokens: 12, outputTokens: 1))
 
     /// A lecture whose saved state holds a paid draft made with style B, no additions and German.
-    private func makeLectureWithDraft(in course: URL, stage: Stage = .done) throws -> LectureFolder {
+    private func makeLectureWithDraft(in course: URL, stage: Stage) throws -> LectureFolder {
         let folder = try LectureFolder.create(in: course, date: Date(timeIntervalSince1970: 1_792_000_000), title: "Week 3")
         try Data("audio".utf8).write(to: folder.audioURL)
         var state = PipelineState(audio: [folder.audioURL], styleID: "B-by-topic", allowAdditions: false,
@@ -205,7 +205,7 @@ import Testing
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let course = root.appendingPathComponent("Course", isDirectory: true)
-        for stage in [Stage.done, .failed, .verifying] {
+        for stage in [Stage.failed, .verifying] {
             let lecture = try makeLectureWithDraft(in: course, stage: stage)
             defer { try? FileManager.default.removeItem(at: lecture.url) }
 
@@ -221,11 +221,25 @@ import Testing
         }
     }
 
+    /// Ruling R35: a finished lecture is processed again from scratch, so it gets fresh notes.
+    @Test func plannerDoesNotCarryTheDraftOfADoneLecture() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let course = root.appendingPathComponent("Course", isDirectory: true)
+        let lecture = try makeLectureWithDraft(in: course, stage: .done)
+
+        let plan = try ReprocessPlanner.plan(request([lecture.audioURL], course: course, language: "de"), now: Self.now)
+
+        #expect(plan.state.draftNotesFile == nil)
+        #expect(plan.state.notesCall == nil)
+        #expect(plan.state.verifyCall == nil)
+    }
+
     @Test func plannerDropsThePaidDraftWhenAnInputChanged() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let course = root.appendingPathComponent("Course", isDirectory: true)
-        let lecture = try makeLectureWithDraft(in: course)
+        let lecture = try makeLectureWithDraft(in: course, stage: .failed)
         let memo = root.appendingPathComponent("memo.m4a")
         try Data("memo".utf8).write(to: memo)
         let slide = root.appendingPathComponent("deck.pdf")

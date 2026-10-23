@@ -86,4 +86,15 @@ import Testing
         #expect(RecordingList.movedUp(list, at: 7) == list)
         #expect(RecordingList.movedDown(list, at: -1) == list)
     }
+
+    @Test func missingListsTheEntriesWhoseFileIsGone() throws {
+        let root = try makeTempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let kept = root.appendingPathComponent("a.m4a")
+        let deleted = root.appendingPathComponent("b.m4a")
+        try touch(kept)
+
+        #expect(RecordingList.missing([kept, deleted]) == [deleted])
+        #expect(RecordingList.missing([kept]).isEmpty)
+    }
 }

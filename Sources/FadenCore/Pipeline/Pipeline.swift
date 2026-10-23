@@ -11,6 +11,8 @@ public enum PipelineError: Error, Equatable {
     case noAudio
     case noSpeech
     case missingDraft
+    /// The lecture folder no longer exists; carries its name.
+    case folderDeleted(String)
 }
 
 /// Runs transcribe → write notes → verify → save for one lecture folder, persisting `.faden/state.json`
@@ -36,6 +38,8 @@ public actor Pipeline {
     private var current: PipelineState?
 
     static let draftName = "draft-notes.md"
+    /// The error of a run the user cancelled.
+    public static let cancelledMessage = "Cancelled"
 
     public init(folder: LectureFolder, transcriber: Transcriber, client: MessageSending, styles: StyleStore,
                 ledger: CostLedger, now: @escaping @Sendable () -> Date,
@@ -65,6 +69,7 @@ public actor Pipeline {
         guard !isRunning else { return current ?? state }
         isRunning = true
         defer { isRunning = false }
+        if let gone = folderGone(state) { return gone }
         var s = state
         if s.stage == .done || s.stage == .failed { s.stage = .transcribing }
         if s.stage == .transcribing, let resume = paidDraftStage(s) { s.stage = resume }
@@ -90,6 +95,7 @@ public actor Pipeline {
         if isRunning, let current { return current }
         isRunning = true
         defer { isRunning = false }
+        if let gone = folderGone(nil) { return gone }
         let state: PipelineState
         do {
             state = try JSONDecoder().decode(PipelineState.self, from: Data(contentsOf: folder.stateURL))
@@ -108,20 +114,42 @@ public actor Pipeline {
         return await execute(resumed)
     }
 
+    /// A failed state for a lecture folder that was deleted, or nil while it exists. Nothing is written,
+    /// so the folder isn't recreated.
+    private func folderGone(_ state: PipelineState?) -> PipelineState? {
+        guard !FileManager.default.fileExists(atPath: folder.url.path) else { return nil }
+        var failed = state ?? PipelineState(stage: .failed, audio: [], styleID: "", allowAdditions: true)
+        failed.stage = .failed
+        failed.failedStage = nil
+        failed.error = Self.message(for: PipelineError.folderDeleted(folder.url.lastPathComponent))
+        continuation.yield(.failed)
+        return failed
+    }
+
     private func execute(_ state: PipelineState) async -> PipelineState {
         var s = state
         s.error = nil
         s.failedStage = nil
+        // Checked before anything is paid for: a deleted input file is never silently dropped.
+        if let deleted = s.deletedInputMessage(
+            startingAt: s.stage, transcriptReusable: s.stage == .transcribing && reusableTranscript(for: s) != nil,
+            exists: { FileManager.default.fileExists(atPath: $0.path) }) {
+            s.failedStage = s.stage
+            s.stage = .failed
+            s.error = deleted
+        }
         while s.stage != .done && s.stage != .failed {
             let stage = s.stage
             do {
                 try checkpoint(s)
+                try Task.checkCancellation()
                 continuation.yield(stage)
                 s = try await perform(stage, s)
             } catch {
                 s.stage = .failed
                 s.failedStage = stage
-                s.error = Self.message(for: error)
+                // A cancelled request can surface as another error, e.g. a cut-off stream.
+                s.error = Task.isCancelled ? Self.cancelledMessage : Self.message(for: error)
             }
         }
         // Best effort: the outcome is already on disk (notes) or in `s.error`.
@@ -160,6 +188,8 @@ public actor Pipeline {
             for url in s.audio {
                 let part = try await transcriber.transcribe(audio: url, language: s.language)
                 parts.append((url.lastPathComponent, part, try await duration(url)))
+                // A transcriber may return what it has so far when cancelled; never keep that as the transcript.
+                try Task.checkCancellation()
             }
             transcript = Transcript.concatenate(parts)
             transcript.model = transcriber.modelName
@@ -228,6 +258,8 @@ public actor Pipeline {
             let request = try Verifier.request(notes: notes, transcript: try loadTranscript(), slides: s.slides)
             result = try await client.send(request)
         } catch {
+            // Cancelling stops the run here; only real failures of the check are skipped.
+            if error is CancellationError || Task.isCancelled { throw CancellationError() }
             s.verificationSkipped = "skipped (\(Self.skipReason(error)))"
             s.stage = .saving
             return s
@@ -287,7 +319,11 @@ public actor Pipeline {
         try encoder.encode(s).write(to: folder.stateURL, options: .atomic)
     }
 
+    /// Creates `.faden/` inside the lecture folder, but never the lecture folder itself.
     private func createFadenDirectory() throws {
+        guard FileManager.default.fileExists(atPath: folder.url.path) else {
+            throw PipelineError.folderDeleted(folder.url.lastPathComponent)
+        }
         try FileManager.default.createDirectory(
             at: folder.stateURL.deletingLastPathComponent(), withIntermediateDirectories: true)
     }
@@ -357,6 +393,8 @@ public actor Pipeline {
         case PipelineError.noAudio: return "No audio to process"
         case PipelineError.noSpeech: return "No speech found"
         case PipelineError.missingDraft: return "The draft notes are missing; process the lecture again"
+        case PipelineError.folderDeleted(let name): return "The lecture folder \(name) was deleted"
+        case is CancellationError: return cancelledMessage
         case AnthropicError.missingKey: return "Add your Anthropic API key in Settings"
         case AnthropicError.keyUnreadable(let status): return "Couldn't read the API key from the Keychain (\(status))"
         case AnthropicError.refused(let category):

@@ -9,19 +9,29 @@ public struct RunBoard: Equatable, Sendable {
         public var stage: Stage
         public var error: String?
         public var isRunning: Bool
+        /// A failed run has a stage Retry resumes at; without one only dismissing (or Process again) is left.
+        public var canResume: Bool
+        /// The notes file a finished run saved.
+        public var notes: URL?
+        /// The finished run's notes file has been deleted since.
+        public var notesDeleted: Bool
 
-        public init(id: UUID, folder: LectureFolder, stage: Stage, error: String?, isRunning: Bool) {
+        public init(id: UUID, folder: LectureFolder, stage: Stage, error: String?, isRunning: Bool,
+                    canResume: Bool = true, notes: URL? = nil, notesDeleted: Bool = false) {
             self.id = id
             self.folder = folder
             self.stage = stage
             self.error = error
             self.isRunning = isRunning
+            self.canResume = canResume
+            self.notes = notes
+            self.notesDeleted = notesDeleted
         }
     }
 
     /// Shown for a restored run whose state was saved mid-stage (Faden quit or crashed while processing).
     public static let interruptedMessage = "Processing was interrupted. Retry continues where it stopped."
-    /// The most runs the status row lists.
+    /// The most runs the status row lists before "+N more".
     public static let visibleLimit = 3
 
     /// Newest first.
@@ -35,11 +45,19 @@ public struct RunBoard: Equatable, Sendable {
     public var isRunning: Bool { runs.contains(where: \.isRunning) }
 
     /// The newest run, plus older ones still running or failed: a finished older run drops out of view.
+    /// Every run not done is listed, so none is kept across launches yet unreachable.
     public var visible: [Run] {
-        Array(runs.enumerated()
+        runs.enumerated()
             .filter { $0.offset == 0 || $0.element.isRunning || $0.element.stage != .done }
             .map(\.element)
-            .prefix(Self.visibleLimit))
+    }
+
+    /// What the status row lists: all of `visible` when expanded, otherwise its first `visibleLimit` runs and
+    /// how many more a "+N more" row reveals.
+    public func shown(expanded: Bool) -> (runs: [Run], more: Int) {
+        let all = visible
+        guard !expanded, all.count > Self.visibleLimit else { return (all, 0) }
+        return (Array(all.prefix(Self.visibleLimit)), all.count - Self.visibleLimit)
     }
 
     /// The folders of runs that aren't done, newest first, for saving across launches.
@@ -62,13 +80,36 @@ public struct RunBoard: Equatable, Sendable {
     }
 
     /// The run's outcome; `folder` may differ from the start when saving renamed it.
-    public mutating func finish(_ id: UUID, folder: LectureFolder, stage: Stage, error: String?) {
+    /// The run's outcome; `folder` may differ from the start when saving renamed it. `canResume` says
+    /// whether a failure has a stage to retry from; `notes` is the file a finished run saved.
+    public mutating func finish(_ id: UUID, folder: LectureFolder, stage: Stage, error: String?,
+                                canResume: Bool = true, notes: URL? = nil) {
         guard let i = runs.firstIndex(where: { $0.id == id }) else { return }
         runs[i].folder = folder
         runs[i].stage = stage
         runs[i].error = error
         runs[i].isRunning = false
+        runs[i].canResume = canResume
+        runs[i].notes = notes
+        runs[i].notesDeleted = false
         dropHiddenRuns()
+    }
+
+    /// Forgets a failed run (the user dismissed it). Files are never touched; a running run stays.
+    public mutating func dismiss(_ id: UUID) {
+        runs.removeAll { $0.id == id && !$0.isRunning }
+    }
+
+    /// Re-checks the idle runs against the disk: a run whose lecture folder is gone is forgotten, and a
+    /// finished run whose notes file is gone is marked `notesDeleted`. Running runs are left alone.
+    public mutating func noticeDeletedFiles(exists: (URL) -> Bool) {
+        runs.removeAll { !$0.isRunning && !exists($0.folder.url) }
+        for i in runs.indices where !runs[i].isRunning {
+            if let notes = runs[i].notes, !exists(notes) {
+                runs[i].notes = nil
+                runs[i].notesDeleted = true
+            }
+        }
     }
 
     /// Rebuilds the board at launch from saved folder paths. Each folder whose `.faden/state.json` is
@@ -82,7 +123,8 @@ public struct RunBoard: Equatable, Sendable {
                   let state = PipelineState.saved(in: folder), state.stage != .done
             else { return nil }
             let error = state.stage == .failed ? state.error : interruptedMessage
-            return Run(id: UUID(), folder: folder, stage: .failed, error: error, isRunning: false)
+            return Run(id: UUID(), folder: folder, stage: .failed, error: error, isRunning: false,
+                       canResume: state.resumeStage != nil)
         }
         return RunBoard(runs: runs)
     }

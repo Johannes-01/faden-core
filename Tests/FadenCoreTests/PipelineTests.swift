@@ -277,12 +277,27 @@ actor FakeClient: MessageSending {
         return s.carryingPaidDraft(from: saved)
     }
 
-    @Test func processAgainResumesFromAPaidDraftWithoutPaying() async throws {
+    /// A first run whose notes (and check, unless `verify` says otherwise) are paid for, but whose saving
+    /// fails because the lecture folder is read-only: a failed run that still holds its paid draft.
+    private func failedRunWithAPaidDraft(_ env: Env, verify: Result<MessageResult, Error> = FakeClient.verify())
+        async -> PipelineState {
+        let folderPath = env.folder.url.path
+        let client = FakeClient([FakeClient.notes(), verify]) { call in
+            if call == 2 {
+                try? FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folderPath)
+            }
+        }
+        let first = await makePipeline(env, transcriber: FakeTranscriber(), client: client).run(makeState(env))
+        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folderPath)
+        return first
+    }
+
+    @Test func processAgainOfAFailedRunResumesFromItsPaidDraftWithoutPaying() async throws {
         let env = try makeEnv()
         defer { env.cleanup() }
-        let first = await makePipeline(env, transcriber: FakeTranscriber(),
-                                       client: FakeClient([FakeClient.notes(), FakeClient.verify()])).run(makeState(env))
-        #expect(first.stage == .done)
+        let first = await failedRunWithAPaidDraft(env)
+        #expect(first.stage == .failed)
+        #expect(first.failedStage == .saving)
 
         let transcriber = FakeTranscriber()
         let client = FakeClient([])
@@ -293,19 +308,37 @@ actor FakeClient: MessageSending {
         #expect(await client.calls == 0)
         #expect(await transcriber.calls == 0)
         #expect(try env.ledgerLines().count == 2)
+        let notes = try String(contentsOf: env.folder.notesURL, encoding: .utf8)
+        #expect(notes.contains("> Verification: ok, 1 flagged"))
+        #expect(notes.contains("> Cost: $0.08"))
+    }
+
+    /// Ruling R35: every Process again of a finished lecture costs the same again (spec §5).
+    @Test func processAgainOfADoneLectureWritesFreshNotes() async throws {
+        let env = try makeEnv()
+        defer { env.cleanup() }
+        let first = await makePipeline(env, transcriber: FakeTranscriber(),
+                                       client: FakeClient([FakeClient.notes(), FakeClient.verify()])).run(makeState(env))
+        #expect(first.stage == .done)
+
+        let client = FakeClient([FakeClient.notes("# Fresh\n\n- 🗣 New notes.\n"), FakeClient.verify(#"{"unsupported":[]}"#)])
+        let again = await makePipeline(env, transcriber: FakeTranscriber(), client: client)
+            .run(processAgainState(env, from: first))
+
+        #expect(again.stage == .done)
+        #expect(await client.models == ["claude-opus-5-5", "claude-haiku-5-5"])
+        #expect(try env.ledgerLines().count == 4)
         let names = try FileManager.default.contentsOfDirectory(atPath: env.folder.url.path)
         let rerun = try #require(names.first { $0.hasPrefix("notes (re-run ") })
         let notes = try String(contentsOf: env.folder.url.appendingPathComponent(rerun), encoding: .utf8)
-        #expect(notes.contains("> Verification: ok, 1 flagged"))
-        #expect(notes.contains("> Cost: $0.08"))
+        #expect(notes.contains("- 🗣 New notes."))
     }
 
     @Test func processAgainOnlyRunsTheCheckWhenItHadNoCall() async throws {
         let env = try makeEnv()
         defer { env.cleanup() }
-        let first = await makePipeline(env, transcriber: FakeTranscriber(), client: FakeClient([
-            FakeClient.notes(), .failure(AnthropicError.http(status: 500, type: nil, message: nil)),
-        ])).run(makeState(env))
+        let first = await failedRunWithAPaidDraft(env, verify: .failure(AnthropicError.http(status: 500, type: nil, message: nil)))
+        #expect(first.stage == .failed)
         #expect(first.verificationSkipped == "skipped (HTTP 500)")
 
         let client = FakeClient([FakeClient.verify()])

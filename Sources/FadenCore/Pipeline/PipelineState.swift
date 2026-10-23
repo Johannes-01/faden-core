@@ -96,12 +96,28 @@ extension PipelineState {
 }
 
 extension PipelineState {
-    /// This fresh state with `previous`'s paid draft and check carried over, when `previous` made them from
-    /// the same audio, slides, notes file, style, 💡 setting and language, and no re-transcription is asked
-    /// for. `Pipeline.run` then resumes from the draft instead of paying for the notes again (it also checks
-    /// the draft file and the speech model). Otherwise the state is returned unchanged.
+    /// Why a run starting at `stage` can't go ahead because one of its input files was deleted, or nil.
+    /// The audio is needed only to transcribe again: not when the stored transcript for this audio is
+    /// reusable (`transcriptReusable`) and no re-transcription is forced. The slides are needed until the
+    /// check has run, the notes file until the notes are written. Names the first missing file.
+    public func deletedInputMessage(startingAt stage: Stage, transcriptReusable: Bool,
+                                    exists: (URL) -> Bool) -> String? {
+        var needed: [URL] = []
+        if stage == .transcribing, forceRetranscribe || !transcriptReusable { needed += audio }
+        if [.transcribing, .writingNotes, .verifying].contains(stage) { needed += slides }
+        if [.transcribing, .writingNotes].contains(stage), let userNotes { needed.append(userNotes) }
+        return needed.first { !exists($0) }.map { "Can't process again: \($0.lastPathComponent) was deleted" }
+    }
+}
+
+extension PipelineState {
+    /// This fresh state with `previous`'s paid draft and check carried over, when `previous` is an unfinished
+    /// run that made them from the same audio, slides, notes file, style, 💡 setting and language, and no
+    /// re-transcription is asked for. `Pipeline.run` then resumes from the draft instead of paying for the
+    /// notes again (it also checks the draft file and the speech model). A finished lecture is never carried
+    /// over: processing it again writes fresh notes (ruling R35). Otherwise the state is returned unchanged.
     public func carryingPaidDraft(from previous: PipelineState) -> PipelineState {
-        guard previous.draftNotesFile != nil, previous.notesCall != nil, !forceRetranscribe,
+        guard previous.stage != .done, previous.draftNotesFile != nil, previous.notesCall != nil, !forceRetranscribe,
               Self.samePaths(previous.audio, audio), Self.samePaths(previous.slides, slides),
               Self.samePaths(previous.userNotes.map { [$0] } ?? [], userNotes.map { [$0] } ?? []),
               previous.styleID == styleID, previous.allowAdditions == allowAdditions, previous.language == language

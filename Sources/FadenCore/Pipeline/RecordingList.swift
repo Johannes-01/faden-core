@@ -63,6 +63,11 @@ public enum RecordingList {
         return (list, expanded.rejected)
     }
 
+    /// The listed recordings whose file no longer exists, e.g. deleted in Finder after they were added.
+    public static func missing(_ recordings: [URL]) -> Set<URL> {
+        Set(recordings.filter { !FileManager.default.fileExists(atPath: $0.path) })
+    }
+
     public static func movedUp<T>(_ list: [T], at index: Int) -> [T] {
         guard list.indices.contains(index), index > 0 else { return list }
         var result = list
