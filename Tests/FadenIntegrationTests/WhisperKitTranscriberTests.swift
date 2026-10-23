@@ -105,6 +105,28 @@ struct WhisperKitTranscriberTests {
         }
     }
 
+    /// Speech below the VAD's absolute floor: no clip is found, so the whole file is transcribed.
+    @Test func fallsBackToWholeFileWhenNoSpeechFound() async throws {
+        let voice = try germanVoice()
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let speech = dir.appendingPathComponent("speech.caf")
+        try say(Self.sentence, voice: voice, to: speech, format: "LEF32@16000")
+        let audio = dir.appendingPathComponent("whisper.caf")
+        try writeAudio(to: audio, parts: [.file(speech, seconds: 8)], gain: 0.002)
+
+        let file = try AVAudioFile(forReading: audio)
+        let buffer = try #require(AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length)))
+        try file.read(into: buffer)
+        let samples = Array(UnsafeBufferPointer(start: buffer.floatChannelData![0], count: Int(buffer.frameLength)))
+        try #require(SpeechRegions.clips(in: samples, sampleRate: 16_000).isEmpty, "precondition: VAD finds nothing")
+
+        let transcript = try await WhisperKitTranscriber(model: .fast).transcribe(audio: audio, language: nil)
+
+        let text = transcript.segments.map(\.text).joined(separator: " ").lowercased()
+        #expect(["pmk", "luft", "übertragen", "heute"].contains { text.contains($0) }, "text: \(text)")
+    }
+
     // MARK: - Helpers
 
     /// "Anna" if installed, else any installed German voice. Cancels (skips) the test when there is none.

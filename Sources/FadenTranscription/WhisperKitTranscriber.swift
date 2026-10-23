@@ -21,6 +21,9 @@ public actor WhisperKitTranscriber: Transcriber {
     public nonisolated let modelName: String
     /// Started on the first `transcribe`; concurrent first calls await the same load.
     private var loading: Task<PipeBox, any Error>?
+    /// The latest transcription. Each call waits for the previous one, so two transcriptions
+    /// never run on the shared WhisperKit instance at once.
+    private var current: Task<Transcript, any Error>?
 
     public init(model: TranscriptionModel) {
         modelName = model.whisperKitVariant
@@ -28,12 +31,30 @@ public actor WhisperKitTranscriber: Transcriber {
 
     /// - Parameter language: An ISO code such as `"de"` to force, or `nil` to auto-detect.
     public func transcribe(audio: URL, language: String?) async throws -> Transcript {
+        let previous = current
+        let task = Task {
+            _ = await previous?.result
+            return try await self.run(audio: audio, language: language)
+        }
+        current = task
+        return try await withTaskCancellationHandler {
+            try await task.value
+        } onCancel: {
+            task.cancel()
+        }
+    }
+
+    private func run(audio: URL, language: String?) async throws -> Transcript {
         let pipe = try await loadedPipe()
+        try Task.checkCancellation()
         let samples = try AudioProcessor.loadAudioAsFloatArray(fromPath: audio.path)
-        let speech = Self.speechClips(in: samples)
-        guard !speech.isEmpty else {
+        let speech = SpeechRegions.clips(in: samples, sampleRate: WhisperKit.sampleRate)
+        let duration = Double(samples.count) / Double(WhisperKit.sampleRate)
+        if speech.isEmpty && duration <= SpeechRegions.Tuning.fallbackMinDuration {
             return Transcript(segments: [], markers: [], language: language, model: modelName)
         }
+        // No speech found in a longer file means the VAD is wrong about this recording (for
+        // example a noise bed above quiet speech), so transcribe all of it instead of nothing.
         let options = DecodingOptions(
             task: .transcribe,
             language: language,
@@ -41,7 +62,7 @@ public actor WhisperKitTranscriber: Transcriber {
             detectLanguage: language == nil,
             skipSpecialTokens: true,
             withoutTimestamps: false,
-            clipTimestamps: speech.flatMap { [$0.start, $0.end] },
+            clipTimestamps: speech.flatMap { [Float($0.start), Float($0.end)] },
             chunkingStrategy: .vad)
         // Only the speech clips are decoded. WhisperKit reports segment times from the start of
         // the array (seek position, plus each VAD chunk's offset), so they are file positions.
@@ -59,51 +80,6 @@ public actor WhisperKitTranscriber: Transcriber {
             segments: segments, markers: [],
             language: language ?? Self.dominantLanguage(of: results),
             model: modelName)
-    }
-
-    /// Voice activity tuning. A laptop mic in a lecture room records the speaker quietly, so the
-    /// speech threshold adapts to the recording instead of WhisperKit's fixed 0.02 RMS:
-    /// `max(absoluteFloor, noiseFloor * noiseFactor)`, where the noise floor is the
-    /// `noisePercentile` of 100 ms frame RMS values (lectures have pauses, so the low frames are room noise).
-    enum VAD {
-        static let frameLength: Float = 0.1
-        static let noisePercentile = 0.1
-        static let noiseFactor: Float = 3
-        static let absoluteFloor: Float = 0.0005
-        /// Speech regions are padded by this many seconds on each side.
-        static let padding: Float = 0.5
-        /// Only silences at least this long are skipped; shorter gaps stay inside one clip.
-        static let minSilence: Float = 2
-    }
-
-    static func speechThreshold(in samples: [Float]) -> Float {
-        let frame = Int(VAD.frameLength * Float(WhisperKit.sampleRate))
-        let energies = stride(from: 0, to: samples.count, by: frame)
-            .map { AudioProcessor.calculateAverageEnergy(of: Array(samples[$0..<min($0 + frame, samples.count)])) }
-            .sorted()
-        guard !energies.isEmpty else { return VAD.absoluteFloor }
-        let noiseFloor = energies[Int(Double(energies.count - 1) * VAD.noisePercentile)]
-        return max(VAD.absoluteFloor, noiseFloor * VAD.noiseFactor)
-    }
-
-    /// Speech regions in seconds, found with WhisperKit's energy VAD at the adaptive threshold,
-    /// padded by `VAD.padding` and merged across gaps shorter than `VAD.minSilence`.
-    static func speechClips(in samples: [Float]) -> [(start: Float, end: Float)] {
-        let rate = Float(WhisperKit.sampleRate)
-        let duration = Float(samples.count) / rate
-        let padding = VAD.padding, minSilence = VAD.minSilence
-        let vad = EnergyVAD(frameLength: VAD.frameLength, energyThreshold: speechThreshold(in: samples))
-        var clips: [(start: Float, end: Float)] = []
-        for chunk in vad.calculateActiveChunks(in: samples) {
-            let start = max(0, Float(chunk.startIndex) / rate - padding)
-            let end = min(duration, Float(chunk.endIndex) / rate + padding)
-            if let last = clips.last, start - last.end < minSilence {
-                clips[clips.count - 1].end = end
-            } else {
-                clips.append((start, end))
-            }
-        }
-        return clips
     }
 
     private func loadedPipe() async throws -> WhisperKit {
@@ -138,8 +114,8 @@ public actor WhisperKitTranscriber: Transcriber {
     }
 }
 
-/// Carries the non-Sendable pipe out of the loading `Task`. The pipe is only reached through
-/// `WhisperKitTranscriber`; the app transcribes one recording at a time.
+/// Carries the non-Sendable pipe out of the loading `Task`. The pipe is only used from
+/// `WhisperKitTranscriber.run`, and runs are serialised.
 private final class PipeBox: @unchecked Sendable {
     let pipe: WhisperKit
     init(pipe: WhisperKit) { self.pipe = pipe }
