@@ -16,9 +16,9 @@ import Testing
     }
 
     @Test func concatenateOffsetsSecondPart() {
-        let a = transcript([(0, 100, "eins")])
+        let a = transcript([(0, 90, "eins")])
         let b = transcript([(5, 10, "zwei")])
-        let joined = Transcript.concatenate([(file: "a.m4a", transcript: a), (file: "b.m4a", transcript: b)])
+        let joined = Transcript.concatenate([(file: "a.m4a", transcript: a, duration: 100), (file: "b.m4a", transcript: b, duration: 20)])
         #expect(joined.segments[1].start == 105)
         #expect(joined.segments[1].end == 110)
         let md = joined.markdown()
@@ -27,20 +27,42 @@ import Testing
     }
 
     @Test func concatenateSinglePartAddsNoMarker() {
-        let joined = Transcript.concatenate([(file: "a.m4a", transcript: transcript([(0, 1, "x")]))])
+        let joined = Transcript.concatenate([(file: "a.m4a", transcript: transcript([(0, 1, "x")]), duration: 1)])
         #expect(joined.markers.isEmpty)
     }
 
-    @Test func concatenateShiftsMarkersAndSkipsEmptyPartOffset() {
+    @Test func concatenateShiftsMarkersAndEmptyPartAdvancesByDuration() {
         let a = transcript([(0, 100, "eins")])
         let empty = transcript([])
         let c = transcript([(2, 3, "drei")], markers: [.pause(at: 1, duration: 30)])
         let joined = Transcript.concatenate([
-            (file: "a", transcript: a), (file: "b", transcript: empty), (file: "c", transcript: c),
+            (file: "a", transcript: a, duration: 100), (file: "b", transcript: empty, duration: 50),
+            (file: "c", transcript: c, duration: 10),
         ])
-        #expect(joined.segments[1].start == 102)
-        #expect(joined.markers.contains(.pause(at: 101, duration: 30)))
-        #expect(joined.markers.contains(.part(index: 3, file: "c", at: 100)))
+        #expect(joined.segments[1].start == 152)
+        #expect(joined.markers.contains(.pause(at: 151, duration: 30)))
+        #expect(joined.markers.contains(.part(index: 3, file: "c", at: 150)))
+    }
+
+    @Test func concatenateTakesFirstModelAndFirstLanguage() {
+        let a = Transcript(segments: [], markers: [], language: nil, model: "m1")
+        let b = Transcript(segments: [], markers: [], language: "en", model: "m2")
+        let c = Transcript(segments: [], markers: [], language: "de", model: "m3")
+        let joined = Transcript.concatenate([
+            (file: "a", transcript: a, duration: 1), (file: "b", transcript: b, duration: 1),
+            (file: "c", transcript: c, duration: 1),
+        ])
+        #expect(joined.model == "m1")
+        #expect(joined.language == "en")
+    }
+
+    @Test func outOfOrderMarkersAreSorted() {
+        let t = transcript([(0, 1, "a"), (100, 101, "b")],
+                           markers: [.pause(at: 60, duration: 5), .pause(at: 30, duration: 5)])
+        let lines = t.markdown().split(separator: "\n").map(String.init)
+        let i30 = lines.firstIndex { $0.contains("[00:00:30]") }
+        let i60 = lines.firstIndex { $0.contains("[00:01:00]") }
+        #expect(i30 != nil && i60 != nil && i30! < i60!)
     }
 
     @Test func pauseMarkerRendered() {

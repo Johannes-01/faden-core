@@ -65,7 +65,7 @@ public struct Transcript: Codable, Equatable, Sendable {
         return lines.joined(separator: "\n") + "\n"
     }
 
-    public static func concatenate(_ parts: [(file: String, transcript: Transcript)]) -> Transcript {
+    public static func concatenate(_ parts: [(file: String, transcript: Transcript, duration: TimeInterval)]) -> Transcript {
         var segments: [TranscriptSegment] = []
         var markers: [TranscriptMarker] = []
         var offset: TimeInterval = 0
@@ -77,9 +77,7 @@ public struct Transcript: Codable, Equatable, Sendable {
                 TranscriptSegment(start: $0.start + offset, end: $0.end + offset, text: $0.text)
             }
             markers += part.transcript.markers.map { $0.shifted(by: offset) }
-            if let last = part.transcript.segments.last {
-                offset += last.end
-            }
+            offset += part.duration
         }
         return Transcript(
             segments: segments, markers: markers,
