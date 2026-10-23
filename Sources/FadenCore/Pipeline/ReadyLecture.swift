@@ -91,6 +91,7 @@ public struct ReadyLecture: Equatable, Sendable {
 
     /// Adds `files` (part files in this folder) to the lecture without pauses, and saves it. The parts are kept
     /// in part-number order, so Process offsets later pauses by the real durations of all earlier parts.
+    /// Changes nothing (in memory or on disk) when saving fails.
     public mutating func include(_ files: [URL]) throws {
         var all = parts
         for file in files where !all.contains(where: { $0.file == file.lastPathComponent }) {
@@ -101,8 +102,10 @@ public struct ReadyLecture: Equatable, Sendable {
             let b = LectureFolder.partNumber(of: $1.element.file) ?? .max
             return (a, $0.offset) < (b, $1.offset)
         }
-        state.parts = ordered.map(\.element)
-        try save()
+        var updated = self
+        updated.state.parts = ordered.map(\.element)
+        try updated.save()
+        self = updated
     }
 
     /// The state Process runs: every part in order, the attachments, the given settings, and each part's pauses
@@ -182,4 +185,44 @@ public struct ReadyLecture: Equatable, Sendable {
     }
 
     private static let log = Logger(subsystem: "de.haick.faden", category: "ReadyLecture")
+}
+
+/// Which review actions a ready lecture allows right now. Opening the card (which can rename the folder),
+/// Process and Continue recording each wait while anything else is working on the lecture: Process reading
+/// durations or running, Continue recording waiting for the microphone prompt, or Stop saving.
+public struct ReviewGate: Equatable, Sendable {
+    /// Nothing is being recorded or recovered.
+    public var recorderIdle: Bool
+    /// Stop is saving a recording.
+    public var isFinishing: Bool
+    /// A recording (e.g. Continue recording) is waiting to start, e.g. for the microphone prompt.
+    public var isStarting: Bool
+    /// Process was pressed for this lecture and its run hasn't started yet.
+    public var isPreparingProcess: Bool
+    /// A pipeline run for this lecture is in progress.
+    public var isRunning: Bool
+    /// The active or recovered recording adds a part to this lecture.
+    public var isRecordingInto: Bool
+    /// The folder holds part files the lecture doesn't list yet.
+    public var hasUnlistedParts: Bool
+
+    public init(recorderIdle: Bool, isFinishing: Bool, isStarting: Bool, isPreparingProcess: Bool,
+                isRunning: Bool, isRecordingInto: Bool, hasUnlistedParts: Bool) {
+        self.recorderIdle = recorderIdle
+        self.isFinishing = isFinishing
+        self.isStarting = isStarting
+        self.isPreparingProcess = isPreparingProcess
+        self.isRunning = isRunning
+        self.isRecordingInto = isRecordingInto
+        self.hasUnlistedParts = hasUnlistedParts
+    }
+
+    private var lectureBusy: Bool { isFinishing || isStarting || isPreparingProcess || isRunning }
+
+    /// The review card may open (its slide edits may rename the folder).
+    public var canOpen: Bool { recorderIdle && !lectureBusy }
+    /// Process may start. Recording into another lecture meanwhile is fine.
+    public var canProcess: Bool { !lectureBusy && !isRecordingInto && !hasUnlistedParts }
+    /// Continue recording may start.
+    public var canContinue: Bool { recorderIdle && !lectureBusy }
 }

@@ -318,6 +318,47 @@ import Testing
         #expect(state.markers == [.pause(at: 1, duration: 1), .pause(at: 32, duration: 1)])
     }
 
+    @Test func aFailedIncludeChangesNothing() throws {
+        let env = try makeEnv()
+        defer { env.cleanup() }
+        let folder = try LectureFolder.create(in: env.course, date: Self.startedAt, title: "Include fails")
+        for name in ["audio.m4a", "audio-2.m4a"] { try Data("a".utf8).write(to: folder.url.appendingPathComponent(name)) }
+        var ready = try ReadyLecture.addingPart(
+            folder.audioURL, pauses: [], to: folder, slides: [], userNotes: nil, styleID: "C-red-line",
+            allowAdditions: true, language: nil, titleIsPlaceholder: false, now: Self.startedAt)
+        // The folder disappears from under the card: saving the state fails.
+        let moved = env.course.appendingPathComponent("elsewhere", isDirectory: true)
+        try FileManager.default.moveItem(at: folder.url, to: moved)
+        let before = ready
+        #expect(throws: (any Error).self) { try ready.include([folder.url.appendingPathComponent("audio-2.m4a")]) }
+        #expect(ready == before)
+        #expect(ready.partCount == 1)
+    }
+
+    @Test func reviewActionsWaitForAnythingElseOnTheLecture() {
+        let free = ReviewGate(recorderIdle: true, isFinishing: false, isStarting: false, isPreparingProcess: false,
+                              isRunning: false, isRecordingInto: false, hasUnlistedParts: false)
+        #expect(free.canOpen && free.canProcess && free.canContinue)
+
+        func with(_ change: (inout ReviewGate) -> Void) -> ReviewGate { var g = free; change(&g); return g }
+        // Process is reading durations, or the run has started: the folder may not be renamed or recorded into.
+        for busy in [with { $0.isPreparingProcess = true }, with { $0.isRunning = true }] {
+            #expect(!busy.canOpen && !busy.canProcess && !busy.canContinue)
+        }
+        // Continue recording is waiting for the microphone prompt.
+        let starting = with { $0.isStarting = true }
+        #expect(!starting.canOpen && !starting.canProcess && !starting.canContinue)
+        let saving = with { $0.isFinishing = true }
+        #expect(!saving.canOpen && !saving.canProcess && !saving.canContinue)
+        // Recording (into another lecture or this one).
+        let recordingElsewhere = with { $0.recorderIdle = false }
+        #expect(!recordingElsewhere.canOpen && recordingElsewhere.canProcess && !recordingElsewhere.canContinue)
+        let recordingInto = with { $0.recorderIdle = false; $0.isRecordingInto = true }
+        #expect(!recordingInto.canProcess)
+        let unlisted = with { $0.hasUnlistedParts = true }
+        #expect(unlisted.canOpen && !unlisted.canProcess && unlisted.canContinue)
+    }
+
     // MARK: - Run board
 
     @Test func readyLecturesAreRestoredAndDeletedOnesDropped() async throws {
