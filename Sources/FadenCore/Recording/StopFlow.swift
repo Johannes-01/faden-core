@@ -2,8 +2,11 @@ import Foundation
 import os
 
 public enum StopFlowError: Error, Equatable, LocalizedError {
-    /// The session has no segment with audio in it; there is nothing to save.
+    /// The session has no segment files; there is nothing to save.
     case nothingRecorded
+    /// Segment files exist but none holds readable audio (e.g. a CAF header never finalised after a
+    /// hard crash). They are kept in `dir`.
+    case unreadableAudio(dir: URL)
     /// The finaliser returned without writing its output file.
     case noFinalAudio
     /// The move returned but `audio.m4a` isn't at its destination.
@@ -12,6 +15,7 @@ public enum StopFlowError: Error, Equatable, LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .nothingRecorded: "Nothing was recorded"
+        case .unreadableAudio(let dir): "The recorded audio could not be read. The files are kept in \(dir.path)"
         case .noFinalAudio: "Joining the recorded audio produced no file"
         case .audioNotDelivered: "The audio file did not arrive in the lecture folder"
         }
@@ -56,9 +60,13 @@ public enum StopFlow {
     /// the lecture folder in the session's course folder, moves the audio to `audio.m4a`, marks the
     /// session stopped and only then deletes the segment directory.
     ///
-    /// On any failure nothing is deleted: the segments, `session.json` and the temporary `.m4a` (if
-    /// the export got that far) stay where they are, and the error is rethrown. A lecture folder
-    /// created before a failed move is left in place (empty).
+    /// `session.json` reads `.stopped` only once `audio.m4a` is in place; until then it keeps the
+    /// caller's phase (`.finishing` after `AudioRecorder.stop()`), so `SegmentStore.unfinished` still
+    /// lists the session if the process dies mid-save.
+    ///
+    /// On any failure nothing is deleted or marked stopped: the segments, `session.json` and the
+    /// temporary `.m4a` (if the export got that far) stay where they are, and the error is rethrown.
+    /// A lecture folder created before a failed move is left in place (empty).
     public static func finish(
         session: RecordingSession, slides: [URL], store: SegmentStore,
         finalize: Finalize = StopFlow.defaultFinalize
@@ -72,7 +80,7 @@ public enum StopFlow {
         do {
             try await finalize(segments, temp)
         } catch AudioFinalizer.FinalizeError.noSegments where recordedDuration(of: segments) == 0 {
-            throw StopFlowError.nothingRecorded
+            throw StopFlowError.unreadableAudio(dir: store.dir)
         }
         guard fm.fileExists(atPath: temp.path) else { throw StopFlowError.noFinalAudio }
 
@@ -94,24 +102,14 @@ public enum StopFlow {
         return Outcome(folder: folder, titleIsPlaceholder: isPlaceholder)
     }
 
-    /// Makes a session that was stopped but couldn't be saved recoverable again: it becomes `.paused`
-    /// with an open pause at `recorded`, so `SegmentStore.unfinished` lists it and a resume continues
-    /// its timeline. A session that isn't stopped is returned unchanged.
-    public static func reopenForRecovery(_ session: RecordingSession, at recorded: TimeInterval, now: Date) -> RecordingSession {
-        guard session.phase == .stopped else { return session }
-        var s = session
-        s.pauses.append(PauseRecord(at: recorded, began: now))
-        s.phase = .paused
-        return s
-    }
-
-    /// A session recovered in `.recording` has no pause for the time the app was gone. Adds one at
+    /// A session recovered in `.recording` (the app died while recording) or `.finishing` (it stopped
+    /// but the save never completed) has no pause for the time since its last audio. Adds one at
     /// `recorded` (the audio on disk) from the last segment write to `now`. Other phases, an unknown
     /// write date, or one not before `now` leave the session unchanged.
     public static func addingCrashGap(
         to session: RecordingSession, recorded: TimeInterval, lastSegmentModified: Date?, now: Date
     ) -> RecordingSession {
-        guard session.phase == .recording, let began = lastSegmentModified, began < now else { return session }
+        guard session.phase == .recording || session.phase == .finishing, let began = lastSegmentModified, began < now else { return session }
         var s = session
         s.pauses.append(PauseRecord(at: recorded, began: began, ended: now))
         return s

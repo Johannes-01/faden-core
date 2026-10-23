@@ -167,38 +167,81 @@ import Testing
         #expect(env.lectureFolders().isEmpty)
     }
 
-    @Test func onlyUnreadableSegmentsIsNothingRecordedAndKeepsThem() async throws {
-        let env = try makeEnv(segments: 1)  // "segment 0" is not a readable CAF
+    // MARK: - Recovery
+
+    /// What `AudioRecorder.stop()` leaves on disk before `finish` runs.
+    private func makeStoppedByRecorder(_ env: Env) throws -> RecordingSession {
+        var session = RecordingSession(
+            id: UUID(uuidString: env.store.dir.lastPathComponent)!, startedAt: Self.startedAt,
+            phase: .recording, courseFolder: env.course)
+        _ = session.beginFinishing()
+        try env.store.save(session)
+        return session
+    }
+
+    private func recordingsRoot(_ env: Env) -> URL { env.store.dir.deletingLastPathComponent() }
+
+    @Test func recorderStoppedButFinishNeverRanIsStillRecoverable() throws {
+        let env = try makeEnv()
         defer { env.cleanup() }
-        await #expect(throws: StopFlowError.nothingRecorded) {
-            try await StopFlow.finish(session: try makeSession(env), slides: [], store: env.store) { _, _ in
+        let session = try makeStoppedByRecorder(env)
+        // The process dies here, before `finish` ran.
+        let found = SegmentStore.unfinished(root: recordingsRoot(env))
+        #expect(found.map(\.id) == [session.id])
+        #expect(SegmentStore(root: recordingsRoot(env), sessionID: session.id).segments().count == 2)
+    }
+
+    @Test func failedFinishLeavesTheSessionUnfinishedOnDisk() async throws {
+        let env = try makeEnv()
+        defer { env.cleanup() }
+        let session = try makeStoppedByRecorder(env)
+        struct Boom: Error {}
+        await #expect(throws: Boom.self) {
+            try await StopFlow.finish(session: session, slides: [], store: env.store) { _, _ in throw Boom() }
+        }
+        #expect(SegmentStore.unfinished(root: recordingsRoot(env)).map(\.id) == [session.id])
+    }
+
+    @Test func zeroSecondSegmentsAreKeptUnfinishedAndNamed() async throws {
+        let env = try makeEnv(segments: 1)  // "segment 0" reads as 0 s, like a CAF header never finalised
+        defer { env.cleanup() }
+        let session = try makeStoppedByRecorder(env)
+        await #expect(throws: StopFlowError.unreadableAudio(dir: env.store.dir)) {
+            try await StopFlow.finish(session: session, slides: [], store: env.store) { _, _ in
                 throw AudioFinalizer.FinalizeError.noSegments
             }
         }
+        #expect(SegmentStore.unfinished(root: recordingsRoot(env)).map(\.id) == [session.id])
         #expect(env.store.segments().count == 1)
+        let message = StopFlowError.unreadableAudio(dir: env.store.dir).localizedDescription
+        #expect(message.contains(env.store.dir.path))
     }
 
-    // MARK: - Recovery
-
-    @Test func reopenTurnsAStoppedSessionIntoARecoverablePausedOne() throws {
+    @Test func attachmentsChangedDuringRecordingArePersisted() throws {
         let env = try makeEnv()
         defer { env.cleanup() }
-        let now = Self.startedAt.addingTimeInterval(3600)
-        let stopped = try makeSession(env)
+        let session = try makeSession(env, phase: .paused)
+        let slides = [URL(fileURLWithPath: "/x/A.pdf"), URL(fileURLWithPath: "/x/B.pdf")]
+        let notes = URL(fileURLWithPath: "/x/DPE - Session 1")
 
-        let reopened = StopFlow.reopenForRecovery(stopped, at: 120, now: now)
-        try env.store.save(reopened)
+        let updated = try env.store.saveAttachments(of: session, slides: slides, notesFile: notes)
 
-        #expect(reopened.phase == .paused)
-        #expect(reopened.pauses == [PauseRecord(at: 120, began: now)])
-        #expect(SegmentStore.unfinished(root: env.store.dir.deletingLastPathComponent()).map(\.id) == [stopped.id])
+        #expect(updated.slides == slides)
+        #expect(updated.notesFile == notes)
+        let loaded = try SegmentStore.load(dir: env.store.dir)
+        #expect(loaded == updated)
+        #expect(loaded.phase == .paused)
+        #expect(loaded.pauses == session.pauses)
     }
 
-    @Test func reopenLeavesAnUnfinishedSessionAlone() throws {
+    @Test func crashGapAlsoCoversAFinishingSession() throws {
         let env = try makeEnv()
         defer { env.cleanup() }
-        let recording = try makeSession(env, phase: .recording)
-        #expect(StopFlow.reopenForRecovery(recording, at: 120, now: Date()) == recording)
+        let session = try makeStoppedByRecorder(env)
+        let stop = Self.startedAt.addingTimeInterval(600)
+        let resume = Self.startedAt.addingTimeInterval(700)
+        let resumed = StopFlow.addingCrashGap(to: session, recorded: 600, lastSegmentModified: stop, now: resume)
+        #expect(resumed.pauses == [PauseRecord(at: 600, began: stop, ended: resume)])
     }
 
     @Test func crashGapAddsAClosedPauseForARecordingSession() throws {
@@ -271,6 +314,28 @@ import Testing
                 [.modificationDate: Self.startedAt.addingTimeInterval(offset)], ofItemAtPath: url.path)
         }
         #expect(StopFlow.latestNotes(in: folder)?.lastPathComponent == "notes (re-run 2026-10-23 10-00).md")
+    }
+}
+
+@Suite struct SavedPipelineStateTests {
+    @Test func readsTheStageARetryResumesAt() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("faden-saved-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folder = try LectureFolder.create(in: root, date: StopFlowTests.startedAt, title: "L")
+        #expect(PipelineState.saved(in: folder) == nil)
+
+        var state = PipelineState(audio: [folder.audioURL], styleID: "C-red-line", allowAdditions: true)
+        state.stage = .failed
+        state.failedStage = .writingNotes
+        try FileManager.default.createDirectory(
+            at: folder.stateURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONEncoder().encode(state).write(to: folder.stateURL)
+
+        #expect(PipelineState.saved(in: folder)?.resumeStage == .writingNotes)
+        state.stage = .verifying
+        state.failedStage = nil
+        #expect(state.resumeStage == .verifying)  // interrupted by a crash mid-stage
     }
 }
 

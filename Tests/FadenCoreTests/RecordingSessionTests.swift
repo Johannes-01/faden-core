@@ -181,4 +181,53 @@ import Testing
         #expect(!r10)
         #expect(s == before)
     }
+
+    @Test func beginFinishingFromRecordingOrPaused() {
+        let t0 = Date(timeIntervalSince1970: 1_000_000)
+        var recording = makeSession()
+        let f1 = recording.beginFinishing(now: t0)
+        #expect(f1)
+        #expect(recording.phase == .finishing)
+        #expect(recording.pauses.isEmpty)
+
+        var paused = makeSession()
+        _ = paused.pause(at: 10, now: t0)
+        let finishedPaused = paused.beginFinishing(now: t0.addingTimeInterval(30))
+        #expect(finishedPaused)
+        #expect(paused.phase == .finishing)
+        #expect(paused.pauses == [PauseRecord(at: 10, began: t0, ended: t0.addingTimeInterval(30))])
+    }
+
+    @Test func finishingSessionOnlyStopsOrRestarts() throws {
+        var s = makeSession()
+        _ = s.beginFinishing()
+        let before = s
+        let f2 = s.beginFinishing()
+        #expect(!f2)
+        let f3 = s.pause(at: 1)
+        #expect(!f3)
+        let f4 = s.resume(at: 1)
+        #expect(!f4)
+        #expect(s == before)
+        try s.prepareForRecording(at: 5)
+        #expect(s.phase == .recording)
+
+        var done = makeSession()
+        _ = done.beginFinishing()
+        let f5 = done.stop()
+        #expect(f5)
+        #expect(done.phase == .stopped)
+        let f6 = done.beginFinishing()
+        #expect(!f6)
+    }
+
+    @Test func finishingSessionIsStillUnfinished() throws {
+        let root = try makeTempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        var s = makeSession()
+        let store = SegmentStore(root: root, sessionID: s.id)
+        _ = s.beginFinishing()
+        try store.save(s)
+        #expect(SegmentStore.unfinished(root: root).map(\.phase) == [.finishing])
+    }
 }

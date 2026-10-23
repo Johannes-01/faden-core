@@ -38,6 +38,16 @@ public struct SegmentStore: Sendable {
         try Self.encoder.encode(session).write(to: Self.sessionFile(in: dir), options: .atomic)
     }
 
+    /// Records changed slides or notes on the session and saves it, so a recovered session keeps
+    /// attachments added during the recording. Returns the updated session.
+    public func saveAttachments(of session: RecordingSession, slides: [URL], notesFile: URL?) throws -> RecordingSession {
+        var s = session
+        s.slides = slides
+        s.notesFile = notesFile
+        try save(s)
+        return s
+    }
+
     public static func load(dir: URL) throws -> RecordingSession {
         try decoder.decode(RecordingSession.self, from: Data(contentsOf: sessionFile(in: dir)))
     }

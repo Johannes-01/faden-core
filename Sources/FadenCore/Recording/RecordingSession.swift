@@ -1,7 +1,11 @@
 import Foundation
 
 public enum RecordingPhase: String, Codable, Sendable {
-    case recording, paused, stopped
+    case recording, paused
+    /// Capture has ended and the audio is being saved into a lecture folder. Still unfinished:
+    /// a crash or a failed save leaves the session recoverable until the audio is in place.
+    case finishing
+    case stopped
 }
 
 /// A pause in the recording. `at` is the position in the recorded audio where it happened.
@@ -74,7 +78,17 @@ public struct RecordingSession: Codable, Equatable, Identifiable, Sendable {
         return true
     }
 
-    /// recording or paused -> stopped. A pause still open is closed at `now`.
+    /// recording or paused -> finishing, when capture ends and saving begins. A pause still open is
+    /// closed at `now`. Returns false and changes nothing otherwise.
+    @discardableResult
+    public mutating func beginFinishing(now: Date = Date()) -> Bool {
+        guard phase == .recording || phase == .paused else { return false }
+        if phase == .paused { closeOpenPause(at: now) }
+        phase = .finishing
+        return true
+    }
+
+    /// recording, paused or finishing -> stopped. A pause still open is closed at `now`.
     @discardableResult
     public mutating func stop(now: Date = Date()) -> Bool {
         guard phase != .stopped else { return false }
@@ -85,11 +99,13 @@ public struct RecordingSession: Codable, Equatable, Identifiable, Sendable {
 
     /// Brings the session into `.recording` before capture (re)starts, e.g. for a session
     /// recovered after a crash: a paused session is resumed (its open pause closed at `now`),
-    /// a recording one is left as is, a stopped one is rejected.
+    /// a recording one is left as is, a finishing one (its save never completed) records again,
+    /// a stopped one is rejected.
     public mutating func prepareForRecording(at recordedTime: TimeInterval, now: Date = Date()) throws {
         switch phase {
         case .recording: return
         case .paused: resume(at: recordedTime, now: now)
+        case .finishing: phase = .recording
         case .stopped: throw RecordingSessionError.alreadyStopped
         }
     }

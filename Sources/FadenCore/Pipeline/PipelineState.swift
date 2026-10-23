@@ -70,3 +70,21 @@ public struct PipelineState: Codable, Equatable, Sendable {
         self.markers = markers
     }
 }
+
+extension PipelineState {
+    /// The folder's saved `.faden/state.json`, or nil if there is none or it can't be read.
+    public static func saved(in folder: LectureFolder) -> PipelineState? {
+        guard let data = try? Data(contentsOf: folder.stateURL) else { return nil }
+        return try? JSONDecoder().decode(PipelineState.self, from: data)
+    }
+
+    /// The stage `Pipeline.retry` resumes at: the failed stage, or the stage a crash interrupted.
+    /// nil when there is nothing to resume (done, or failed without a stage).
+    public var resumeStage: Stage? {
+        switch stage {
+        case .done: nil
+        case .failed: failedStage
+        default: stage
+        }
+    }
+}
