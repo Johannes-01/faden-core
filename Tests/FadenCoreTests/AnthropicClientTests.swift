@@ -79,9 +79,9 @@ extension NSLock {
 
 // MARK: - Helpers
 
-private func fixture(_ name: String) throws -> Data {
-    let url = try #require(Bundle.module.url(forResource: name, withExtension: "txt", subdirectory: "Fixtures"))
-    return try Data(contentsOf: url)
+private func fixture(_ name: String, file: StaticString = #filePath) throws -> Data {
+    let dir = URL(fileURLWithPath: "\(file)").deletingLastPathComponent()
+    return try Data(contentsOf: dir.appendingPathComponent("Fixtures/\(name).txt"))
 }
 
 private func json(_ s: String) -> Data { Data(s.utf8) }
