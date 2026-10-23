@@ -19,14 +19,19 @@ public enum TranscriptionModel: String, CaseIterable, Codable, Sendable {
 /// is reused for later calls.
 public actor WhisperKitTranscriber: Transcriber {
     public nonisolated let modelName: String
-    /// Started on the first `transcribe`; concurrent first calls await the same load.
-    private var loading: Task<PipeBox, any Error>?
+    /// Downloads and loads the model on the first `transcribe`; concurrent first calls await the same load,
+    /// and a cancelled call stops waiting without stopping the load.
+    private let loading: SharedLoad<PipeBox>
     /// The latest transcription. Each call waits for the previous one, so two transcriptions
     /// never run on the shared WhisperKit instance at once.
     private var current: Task<Transcript, any Error>?
 
     public init(model: TranscriptionModel) {
-        modelName = model.whisperKitVariant
+        let variant = model.whisperKitVariant
+        modelName = variant
+        loading = SharedLoad {
+            PipeBox(pipe: try await WhisperKit(WhisperKitConfig(model: variant, verbose: false, load: true, download: true)))
+        }
     }
 
     /// - Parameter language: An ISO code such as `"de"` to force, or `nil` to auto-detect.
@@ -83,18 +88,7 @@ public actor WhisperKitTranscriber: Transcriber {
     }
 
     private func loadedPipe() async throws -> WhisperKit {
-        if let loading { return try await loading.value.pipe }
-        let model = modelName
-        let task = Task {
-            PipeBox(pipe: try await WhisperKit(WhisperKitConfig(model: model, verbose: false, load: true, download: true)))
-        }
-        loading = task
-        do {
-            return try await task.value.pipe
-        } catch {
-            loading = nil  // let a later call retry, e.g. after a failed download
-            throw error
-        }
+        try await loading.value().pipe
     }
 
     /// Strips Whisper special tokens such as `<|de|>` or `<|0.00|>`, drops non-speech

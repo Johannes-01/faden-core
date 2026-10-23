@@ -193,6 +193,7 @@ public actor Pipeline {
             }
             transcript = Transcript.concatenate(parts)
             transcript.model = transcriber.modelName
+            transcript.audioFiles = s.audio.map(\.lastPathComponent)
         }
         // A reused transcript may already carry these pauses.
         for marker in s.markers where !transcript.markers.contains(marker) {
@@ -208,7 +209,8 @@ public actor Pipeline {
     }
 
     /// The folder's stored transcript, when every audio file lives in this folder, it was made with the
-    /// current model, it covers the same files, and no re-transcription was asked for. All or nothing.
+    /// current model, it covers exactly the same files (one file too), and no re-transcription was asked
+    /// for. All or nothing.
     private func reusableTranscript(for s: PipelineState) -> Transcript? {
         guard !s.forceRetranscribe else { return nil }
         let dir = folder.url.resolvingSymlinksInPath().path
@@ -217,12 +219,15 @@ public actor Pipeline {
               let stored = try? JSONDecoder().decode(Transcript.self, from: data),
               stored.model == transcriber.modelName
         else { return nil }
-        // `concatenate` marks each part's file only when there are several.
-        let storedFiles = stored.markers.compactMap { marker -> String? in
+        let files = s.audio.map(\.lastPathComponent)
+        if let recorded = stored.audioFiles { return recorded == files ? stored : nil }
+        // Saved before the file names were recorded: part markers name the files of several parts; one
+        // file is named nowhere, so it fits only the Record flow's `audio.<ext>`.
+        let parts = stored.markers.compactMap { marker -> String? in
             if case .part(_, let file, _) = marker { file } else { nil }
         }
-        let files = s.audio.count > 1 ? s.audio.map(\.lastPathComponent) : []
-        return storedFiles == files ? stored : nil
+        if !parts.isEmpty { return parts == files ? stored : nil }
+        return files.count == 1 && (files[0] as NSString).deletingPathExtension == "audio" ? stored : nil
     }
 
     private func writeNotes(_ state: PipelineState) async throws -> PipelineState {

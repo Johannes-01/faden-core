@@ -175,6 +175,35 @@ actor SuspendingClient: MessageSending {
         #expect(try env.notesFiles().isEmpty)
     }
 
+    /// R38: the notes call returns although the run was cancelled meanwhile. The paid draft is saved and the
+    /// run stops before the check; Retry never pays for the notes again.
+    @Test func cancellingAsTheNotesArriveKeepsThePaidDraftAndStopsBeforeTheCheck() async throws {
+        let env = try makeEnv()
+        defer { env.cleanup() }
+        // FakeClient runs in the caller's task, so this cancels the run while the notes call is in flight.
+        let client = FakeClient([FakeClient.notes()]) { call in
+            if call == 1 { withUnsafeCurrentTask { $0?.cancel() } }
+        }
+        let pipeline = env.pipeline(transcriber: FakeTranscriber(), client: client)
+
+        let cancelled = await Task { await pipeline.run(env.state()) }.value
+
+        #expect(cancelled.stage == .failed)
+        #expect(cancelled.failedStage == .verifying)
+        #expect(cancelled.error == "Cancelled")
+        let saved = try env.saved()
+        #expect(saved == cancelled)
+        #expect(saved.notesCall != nil)
+        #expect(saved.draftNotesFile == "draft-notes.md")
+        #expect(try env.notesFiles().isEmpty)
+
+        let retryClient = FakeClient([FakeClient.verify()])
+        let retried = await env.pipeline(transcriber: FakeTranscriber(), client: retryClient).retry()
+
+        #expect(retried.stage == .done)
+        #expect(await retryClient.models == ["claude-haiku-5-5"])
+    }
+
     // MARK: - Deleted inputs
 
     private func storeTranscript(_ env: Env) throws {

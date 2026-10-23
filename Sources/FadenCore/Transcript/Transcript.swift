@@ -36,12 +36,16 @@ public struct Transcript: Codable, Equatable, Sendable {
     public var markers: [TranscriptMarker]
     public var language: String?
     public var model: String
+    /// The names of the audio files transcribed, in order. nil in transcripts saved before it was recorded.
+    public var audioFiles: [String]?
 
-    public init(segments: [TranscriptSegment], markers: [TranscriptMarker], language: String?, model: String) {
+    public init(segments: [TranscriptSegment], markers: [TranscriptMarker], language: String?, model: String,
+                audioFiles: [String]? = nil) {
         self.segments = segments
         self.markers = markers
         self.language = language
         self.model = model
+        self.audioFiles = audioFiles
     }
 
     /// True when the segments hold fewer than 200 non-whitespace characters in total.

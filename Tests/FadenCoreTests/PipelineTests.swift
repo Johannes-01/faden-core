@@ -616,6 +616,51 @@ actor FakeClient: MessageSending {
         #expect(await transcriber.calls == 2)
     }
 
+    /// R38: one recording reuses only a transcript made from that same file.
+    @Test func aLoneOtherRecordingDoesNotReuseTheTranscriptOfAudio() async throws {
+        let env = try makeEnv()
+        defer { env.cleanup() }
+        _ = await makePipeline(env, transcriber: FakeTranscriber(),
+                               client: FakeClient([FakeClient.notes(), FakeClient.verify()])).run(makeState(env))
+        let stored = try JSONDecoder().decode(Transcript.self, from: Data(contentsOf: env.folder.transcriptMetaURL))
+        #expect(stored.audioFiles == ["audio.m4a"])
+        let second = env.folder.url.appendingPathComponent("audio-2.m4a")
+        try Data("part 2".utf8).write(to: second)
+
+        let same = FakeTranscriber()
+        _ = await makePipeline(env, transcriber: same, client: FakeClient([FakeClient.notes(), FakeClient.verify()]))
+            .run(makeState(env))
+        let other = FakeTranscriber()
+        _ = await makePipeline(env, transcriber: other, client: FakeClient([FakeClient.notes(), FakeClient.verify()]))
+            .run(makeState(env, audio: [second]))
+
+        #expect(await same.calls == 0)
+        #expect(await other.calls == 1)
+    }
+
+    /// A transcript.json from before file names were recorded fits only the Record flow's `audio.<ext>`.
+    @Test func anOlderTranscriptWithoutFileNamesFitsOnlyAudio() async throws {
+        let env = try makeEnv()
+        defer { env.cleanup() }
+        var legacy = FakeTranscriber.speech
+        legacy.model = "fake-model"
+        legacy.audioFiles = nil
+        try JSONEncoder().encode(legacy).write(to: env.folder.transcriptMetaURL.creatingParent())
+        let second = env.folder.url.appendingPathComponent("audio-2.m4a")
+        try Data("part 2".utf8).write(to: second)
+
+        let other = FakeTranscriber()
+        _ = await makePipeline(env, transcriber: other, client: FakeClient([FakeClient.notes(), FakeClient.verify()]))
+            .run(makeState(env, audio: [second]))
+        #expect(await other.calls == 1)
+
+        try JSONEncoder().encode(legacy).write(to: env.folder.transcriptMetaURL)
+        let record = FakeTranscriber()
+        _ = await makePipeline(env, transcriber: record, client: FakeClient([FakeClient.notes(), FakeClient.verify()]))
+            .run(makeState(env))
+        #expect(await record.calls == 0)
+    }
+
     @Test func partsAreOffsetByDurationAndPausesApplied() async throws {
         let env = try makeEnv()
         defer { env.cleanup() }
