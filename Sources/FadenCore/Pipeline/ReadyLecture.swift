@@ -6,6 +6,9 @@ public enum ReadyLectureError: Error, Equatable, LocalizedError {
     case deleted(String)
     /// Recorded parts in the folder that the lecture doesn't list yet; carries their names. Include them first.
     case unlisted([String])
+    /// The lecture's saved state is no longer "ready to process" (e.g. Process again took it over), so its
+    /// recording list, slides and notes aren't changed.
+    case notReady
 
     public var errorDescription: String? {
         switch self {
@@ -13,6 +16,7 @@ public enum ReadyLectureError: Error, Equatable, LocalizedError {
         case .unlisted(let names):
             "Can't process: \(names.joined(separator: ", ")) \(names.count == 1 ? "is" : "are") not in this lecture yet. "
                 + "Include \(names.count == 1 ? "it" : "them") on the review card first."
+        case .notReady: "This lecture is no longer waiting to be processed, so it wasn't changed"
         }
     }
 }
@@ -51,7 +55,8 @@ public struct ReadyLecture: Equatable, Sendable {
         _ audio: URL, pauses: [TranscriptMarker], to folder: LectureFolder, slides: [URL], userNotes: URL?,
         styleID: String, allowAdditions: Bool, language: String?, titleIsPlaceholder: Bool, now: Date
     ) throws -> ReadyLecture {
-        var lecture = load(folder) ?? ReadyLecture(folder: folder, state: {
+        let existing = load(folder)
+        var lecture = existing ?? ReadyLecture(folder: folder, state: {
             var state = PipelineState(
                 stage: .ready, audio: [], styleID: styleID, allowAdditions: allowAdditions, language: language,
                 titleIsPlaceholder: titleIsPlaceholder)
@@ -64,17 +69,22 @@ public struct ReadyLecture: Equatable, Sendable {
         var parts = lecture.parts
         let part = RecordedPart(file: audio.lastPathComponent, pauses: pauses)
         if let i = parts.firstIndex(where: { $0.file == part.file }) { parts[i] = part } else { parts.append(part) }
+        // Without a ready state, a part may start one only over no state or a finished or failed run.
+        let allowFresh = existing == nil
+        try lecture.checkDisk(allowFresh: allowFresh)
         lecture.state.parts = parts
         lecture.state.slides = slides
         lecture.state.userNotes = userNotes
         lecture.renameForFirstSlide(now: now)
-        try lecture.save()
+        try lecture.save(allowFresh: allowFresh)
         return lecture
     }
 
     /// Changes the slides and notes during review and saves them. The first slide renames a placeholder-titled
     /// folder to the slide's title (`titleIsPlaceholder` becomes false); a folder that can't be renamed keeps its name.
+    /// Throws `ReadyLectureError.notReady`, changing nothing, once the state on disk isn't ready any more.
     public mutating func setAttachments(slides: [URL], userNotes: URL?, now: Date) throws {
+        try checkDisk(allowFresh: false)
         state.slides = slides
         state.userNotes = userNotes
         renameForFirstSlide(now: now)
@@ -91,8 +101,9 @@ public struct ReadyLecture: Equatable, Sendable {
 
     /// Adds `files` (part files in this folder) to the lecture without pauses, and saves it. The parts are kept
     /// in part-number order, so Process offsets later pauses by the real durations of all earlier parts.
-    /// Changes nothing (in memory or on disk) when saving fails.
+    /// Changes nothing (in memory or on disk) when saving fails, or when the state on disk isn't ready any more.
     public mutating func include(_ files: [URL]) throws {
+        try checkDisk(allowFresh: false)
         var all = parts
         for file in files where !all.contains(where: { $0.file == file.lastPathComponent }) {
             all.append(RecordedPart(file: file.lastPathComponent, pauses: []))
@@ -126,6 +137,15 @@ public struct ReadyLecture: Equatable, Sendable {
             stage: .transcribing, audio: urls, slides: state.slides, userNotes: state.userNotes, styleID: styleID,
             allowAdditions: allowAdditions, language: language, titleIsPlaceholder: state.titleIsPlaceholder,
             markers: Self.combinedMarkers(parts.map(\.pauses), durations: durations))
+    }
+
+    /// The pauses of all parts on the joined timeline, for Process again on exactly this lecture's recordings in
+    /// order (offset by the real durations of earlier parts, as in `processingState`); nil for other recordings.
+    public func markers(forRecordings recordings: [URL], duration: Pipeline.DurationLoader) async throws -> [TranscriptMarker]? {
+        guard PipelineState.samePaths(recordings, audio) else { return nil }
+        var durations: [TimeInterval] = []
+        for url in audio.dropLast() { durations.append(try await duration(url)) }
+        return Self.combinedMarkers(parts.map(\.pauses), durations: durations)
     }
 
     /// The total length of all parts, or nil when one can't be read.
@@ -170,14 +190,26 @@ public struct ReadyLecture: Equatable, Sendable {
         }
     }
 
-    /// Writes `state.json` with `audio` matching the parts. Never creates the lecture folder itself.
-    private mutating func save() throws {
+    /// Re-reads `state.json` and refuses (`notReady`) unless it is still ready to process; with `allowFresh`,
+    /// no state or a finished or failed one may be replaced too. Never one a run may be writing.
+    private func checkDisk(allowFresh: Bool) throws {
+        guard FileManager.default.fileExists(atPath: folder.url.path) else {
+            throw PipelineError.folderDeleted(folder.url.lastPathComponent)
+        }
+        switch PipelineState.saved(in: folder)?.stage {
+        case .ready: return
+        case nil, .done, .failed: if allowFresh { return }
+        default: break
+        }
+        throw ReadyLectureError.notReady
+    }
+
+    /// Writes `state.json` with `audio` matching the parts, after `checkDisk`. Never creates the lecture folder itself.
+    private mutating func save(allowFresh: Bool = false) throws {
+        try checkDisk(allowFresh: allowFresh)
         state.stage = .ready
         state.audio = audio
         let fm = FileManager.default
-        guard fm.fileExists(atPath: folder.url.path) else {
-            throw PipelineError.folderDeleted(folder.url.lastPathComponent)
-        }
         try fm.createDirectory(at: folder.stateURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -225,4 +257,7 @@ public struct ReviewGate: Equatable, Sendable {
     public var canProcess: Bool { !lectureBusy && !isRecordingInto && !hasUnlistedParts }
     /// Continue recording may start.
     public var canContinue: Bool { recorderIdle && !lectureBusy }
+    /// Process again may use this lecture's folder. Recording another lecture meanwhile is fine, and unlisted
+    /// parts don't matter: Process again processes the recordings the user picked.
+    public var canReprocess: Bool { !lectureBusy && !isRecordingInto }
 }

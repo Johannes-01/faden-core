@@ -12,6 +12,9 @@ public struct ReprocessRequest: Sendable {
     /// `nil` means auto-detect; otherwise an ISO code (`de` or `en`).
     public var language: String?
     public var forceRetranscribe: Bool
+    /// Pauses on the recordings' joined timeline, e.g. from a ready lecture's parts (`ReadyLecture.markers`).
+    /// nil keeps the previous state's markers while the audio is the same.
+    public var markers: [TranscriptMarker]?
 
     public init(recordings: [URL], courseFolder: URL, slides: [URL], userNotes: URL?, styleID: String,
                 allowAdditions: Bool, language: String?, forceRetranscribe: Bool) {
@@ -32,17 +35,26 @@ public enum ReprocessPlannerError: Error, Equatable {
 
 /// Decides where a "Process again" result goes and gathers its audio (spec §6.1).
 public enum ReprocessPlanner {
+    /// The existing lecture folder `plan` would reuse: the first recording's, when it is a lecture folder in
+    /// `courseFolder`. nil when `plan` creates a new one.
+    public static func targetFolder(_ r: ReprocessRequest) -> LectureFolder? {
+        guard let first = r.recordings.first else { return nil }
+        let parent = first.deletingLastPathComponent()
+        guard LectureFolder.isLectureFolder(parent), isSameDirectory(parent.deletingLastPathComponent(), r.courseFolder)
+        else { return nil }
+        return LectureFolder(url: parent)
+    }
+
     /// Uses the first recording's lecture folder when it sits in `courseFolder`, otherwise creates a new one.
     /// Recordings outside any lecture folder are copied in; those in lecture folders are referenced in place.
     public static func plan(_ r: ReprocessRequest, now: Date) throws -> (folder: LectureFolder, state: PipelineState) {
-        guard let first = r.recordings.first else { throw ReprocessPlannerError.noRecordings }
+        guard !r.recordings.isEmpty else { throw ReprocessPlannerError.noRecordings }
 
         let folder: LectureFolder
         let titleIsPlaceholder: Bool
         var previous: PipelineState?
-        let firstParent = first.deletingLastPathComponent()
-        if LectureFolder.isLectureFolder(firstParent), isSameDirectory(firstParent.deletingLastPathComponent(), r.courseFolder) {
-            folder = LectureFolder(url: firstParent)
+        if let target = targetFolder(r) {
+            folder = target
             previous = PipelineState.saved(in: folder)
             // Keep the existing folder's name unless it still carries a placeholder.
             titleIsPlaceholder = r.slides.isEmpty && (previous?.titleIsPlaceholder ?? false)
@@ -64,7 +76,7 @@ public enum ReprocessPlanner {
         }
 
         // The recording's pauses live only in the state; keep them while the audio is the same.
-        let markers = previous.flatMap { PipelineState.samePaths($0.audio, audio) ? $0.markers : nil } ?? []
+        let markers = r.markers ?? previous.flatMap { PipelineState.samePaths($0.audio, audio) ? $0.markers : nil } ?? []
         var state = PipelineState(
             audio: audio, slides: r.slides, userNotes: r.userNotes, styleID: r.styleID,
             allowAdditions: r.allowAdditions, language: r.language, forceRetranscribe: r.forceRetranscribe,
