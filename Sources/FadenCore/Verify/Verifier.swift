@@ -17,6 +17,8 @@ public enum VerifierError: Error, Equatable {
 /// Builds the Haiku request that flags note lines the sources don't support, and applies its findings.
 public enum Verifier {
     static let flag = " ⚠️ not found in sources"
+    /// The model the check asks for.
+    public static let model = "claude-haiku-5-5"
 
     public static func request(notes: String, transcript: Transcript, slides: [URL]) throws -> MessageRequest {
         // Slides first, then the transcript, then the notes under test. Nothing is cached: the cache is
@@ -26,7 +28,7 @@ public enum Verifier {
         content.append(.text("Notes to check:\n\n" + notes, cache: false))
 
         return MessageRequest(
-            model: "claude-haiku-5-5",
+            model: model,
             maxTokens: 16000,
             stream: false,
             system: [.text(try systemPrompt(), cache: false)],

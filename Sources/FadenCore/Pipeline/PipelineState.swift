@@ -13,6 +13,9 @@ public struct PaidCall: Codable, Equatable, Sendable {
         self.model = model
         self.usage = usage
     }
+
+    /// The call's price in USD, or nil when the model has no known price.
+    public var usd: Double? { Pricing.usd(model: model, usage: usage) }
 }
 
 /// The pipeline's progress for one lecture, persisted as `.faden/state.json` before each stage.

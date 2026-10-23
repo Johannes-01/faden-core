@@ -237,13 +237,11 @@ public actor Pipeline {
         let merged = Verifier.merge(findings, into: draft)
         let style = try styles.resolve(id: s.styleID, hasSlides: !s.slides.isEmpty)
 
-        let cost = s.costUSD
         let header = NotesHeader(
             date: now(), style: Self.shortName(style), slides: s.slides.map(\.lastPathComponent),
             audio: s.audio.map(\.lastPathComponent), userNotes: s.userNotes?.lastPathComponent,
-            notesUsage: s.notesCall?.usage ?? Usage(), verifyUsage: s.verifyCall?.usage,
-            verification: s.verificationSkipped ?? "ok, \(findings.count - merged.unmatched) flagged",
-            costUSD: cost)
+            notesCall: s.notesCall ?? PaidCall(model: NotesPrompt.model, usage: Usage()), verifyCall: s.verifyCall,
+            verification: s.verificationSkipped ?? "ok, \(findings.count - merged.unmatched) flagged")
 
         let target = folder.newNotesURL(now: now())
         try Data(header.insert(into: merged.notes).utf8).write(to: target, options: .withoutOverwriting)

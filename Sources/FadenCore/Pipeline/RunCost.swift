@@ -6,7 +6,7 @@ extension PipelineState {
     public var costUSD: Double? {
         var sum = 0.0
         for call in [notesCall, verifyCall].compactMap({ $0 }) {
-            guard let price = Pricing.usd(model: call.model, usage: call.usage) else { return nil }
+            guard let price = call.usd else { return nil }
             sum += price
         }
         return sum

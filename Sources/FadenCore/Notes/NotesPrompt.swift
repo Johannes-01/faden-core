@@ -26,6 +26,9 @@ public enum NotesPromptError: Error, Equatable {
 
 /// Builds the Opus request that writes the lecture notes.
 public enum NotesPrompt {
+    /// The model the notes call asks for.
+    public static let model = "claude-opus-5-5"
+
     public static func request(_ i: NotesInputs) throws -> MessageRequest {
         var system = try baseSystemPrompt() + "\n\n## Style\n" + i.style.prompt
         if !i.allowAdditions {
@@ -43,7 +46,7 @@ public enum NotesPrompt {
         content.append(.text(i.transcript.markdown(), cache: false))
 
         return MessageRequest(
-            model: "claude-opus-5-5",
+            model: model,
             maxTokens: 64000,
             stream: true,
             system: [.text(system, cache: false)],
