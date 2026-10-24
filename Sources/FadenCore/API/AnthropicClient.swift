@@ -30,17 +30,38 @@ public struct Usage: Codable, Equatable, Sendable {
     }
 }
 
+/// How much of the Claude subscription's usage limits is used, as fractions from 0 to 1.
+public struct SubscriptionLimits: Codable, Equatable, Sendable {
+    /// The rolling five-hour session window.
+    public var session: Double
+    /// The seven-day window.
+    public var week: Double
+
+    public init(session: Double, week: Double) {
+        self.session = session
+        self.week = week
+    }
+
+    /// "session 12% · week 61%".
+    public var text: String {
+        String(format: "session %.0f%% · week %.0f%%", session * 100, week * 100)
+    }
+}
+
 public struct MessageResult: Sendable {
     public var text: String
     public var model: String
     public var stopReason: String
     public var usage: Usage
+    /// Set when the call ran on the Claude subscription (`ClaudeCLIClient`): the limits' use after it.
+    public var subscription: SubscriptionLimits?
 
-    public init(text: String, model: String, stopReason: String, usage: Usage) {
+    public init(text: String, model: String, stopReason: String, usage: Usage, subscription: SubscriptionLimits? = nil) {
         self.text = text
         self.model = model
         self.stopReason = stopReason
         self.usage = usage
+        self.subscription = subscription
     }
 }
 

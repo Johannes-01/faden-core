@@ -23,14 +23,17 @@ public struct RecordedPart: Codable, Equatable, Sendable {
 public struct PaidCall: Codable, Equatable, Sendable {
     public var model: String
     public var usage: Usage
+    /// Set when the call ran on the Claude subscription: the limits' use right after it.
+    public var subscription: SubscriptionLimits?
 
-    public init(model: String, usage: Usage) {
+    public init(model: String, usage: Usage, subscription: SubscriptionLimits? = nil) {
         self.model = model
         self.usage = usage
+        self.subscription = subscription
     }
 
-    /// The call's price in USD, or nil when the model has no known price.
-    public var usd: Double? { Pricing.usd(model: model, usage: usage) }
+    /// The call's price in USD, or nil when the model has no known price. Subscription calls cost nothing.
+    public var usd: Double? { subscription != nil ? 0 : Pricing.usd(model: model, usage: usage) }
 }
 
 /// The pipeline's progress for one lecture, persisted as `.faden/state.json` before each stage.

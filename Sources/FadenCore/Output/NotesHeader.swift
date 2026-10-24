@@ -39,9 +39,12 @@ public struct NotesHeader: Sendable {
         let tokensOut = usages.reduce(0) { $0 + $1.outputTokens }
         // An unpriced call shows as unknown, never as $0.
         let unpriced = calls.filter { $0.usd == nil }.map(\.model)
-        let cost = unpriced.isEmpty
+        var cost = unpriced.isEmpty
             ? String(format: "$%.2f", calls.compactMap(\.usd).reduce(0, +))
             : "— (price unknown for \(unpriced.joined(separator: ", ")))"
+        if let limits = calls.last(where: { $0.subscription != nil })?.subscription {
+            cost = "Claude subscription, \(limits.text) used after the run"
+        }
         let checkModel = verifyCall?.model ?? Verifier.model
 
         return [
