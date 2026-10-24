@@ -19,6 +19,21 @@ public enum RunCost {
         usd.map { String(format: "$%.2f", $0) }
     }
 
+    /// The finished run for the notification: "48,210 tokens · session 12% · week 61%" when it ran on the
+    /// subscription, else its cost, e.g. "$0.84". nil when neither is known.
+    public static func summary(_ state: PipelineState) -> String? {
+        let calls = [state.notesCall, state.verifyCall].compactMap { $0 }
+        guard let limits = calls.last(where: { $0.subscription != nil })?.subscription else {
+            return text(state.costUSD)
+        }
+        var tokens = 0
+        for u in calls.map(\.usage) {
+            tokens += u.inputTokens + u.cacheReadInputTokens + u.cacheCreationInputTokens
+            tokens += u.outputTokens
+        }
+        return "\(tokens.formatted()) tokens · \(limits.text)"
+    }
+
     /// The cost text of the lecture's saved state, e.g. "$0.84", or nil if unreadable or unpriced.
     public static func text(for folder: LectureFolder) -> String? {
         PipelineState.saved(in: folder).flatMap { text($0.costUSD) }

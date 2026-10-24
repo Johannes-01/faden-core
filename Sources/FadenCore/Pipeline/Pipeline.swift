@@ -244,7 +244,7 @@ public actor Pipeline {
         try Data(result.text.utf8).write(to: draftURL(Self.draftName), options: .atomic)
         s.draftNotesFile = Self.draftName
         s.styleName = Self.shortName(style)
-        let call = PaidCall(model: result.model, usage: result.usage)
+        let call = PaidCall(model: result.model, usage: result.usage, subscription: result.subscription)
         s.notesCall = call
         record(call)
         s.stage = .verifying
@@ -271,7 +271,7 @@ public actor Pipeline {
             s.stage = .saving
             return s
         }
-        let call = PaidCall(model: result.model, usage: result.usage)
+        let call = PaidCall(model: result.model, usage: result.usage, subscription: result.subscription)
         s.verifyCall = call
         record(call)
         do {
@@ -355,7 +355,7 @@ public actor Pipeline {
     private func record(_ call: PaidCall) {
         try? ledger.append(CostRecord(
             date: now(), lecture: folder.url.lastPathComponent, model: call.model, usage: call.usage,
-            usd: Pricing.usd(model: call.model, usage: call.usage)))
+            usd: call.usd))
     }
 
     /// `C` for the bundled `C · Red line first, then detail`; a custom style's full name otherwise.

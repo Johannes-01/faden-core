@@ -13,7 +13,7 @@ public enum ClaudeCLIError: Error, Equatable, Sendable {
 /// The request's content blocks go to the CLI unchanged as one stream-json user message, so PDFs
 /// arrive as documents just as they do over the API. Tools, customizations (`--safe-mode`) and
 /// session files are off, and `ANTHROPIC_API_KEY` is removed so the CLI can't fall back to API billing.
-/// Usage is reported as zero: subscription runs cost nothing per call, so the ledger shows $0.
+/// Results carry the subscription's limit use, which prices the call at $0 (see `PaidCall.usd`).
 public struct ClaudeCLIClient: MessageSending {
     public struct Output: Sendable {
         public var status: Int32
@@ -103,15 +103,22 @@ public struct ClaudeCLIClient: MessageSending {
 
     // MARK: Response
 
-    /// Reads the stream-json events: the model from the last `assistant` event, everything else from `result`.
+    /// Reads the stream-json events: the model from the last `assistant` event, the limits from the last
+    /// `rate_limit_event`, everything else from `result`.
     static func parse(_ output: Output, requestedModel: String) throws -> MessageResult {
         var result: [String: Any]?
         var model: String?
+        var limits = SubscriptionLimits(session: 0, week: 0)
         for line in output.stdout.split(separator: 0x0A) {
             guard let event = (try? JSONSerialization.jsonObject(with: Data(line))) as? [String: Any] else { continue }
             switch event["type"] as? String {
             case "assistant":
                 if let m = (event["message"] as? [String: Any])?["model"] as? String { model = m }
+            case "rate_limit_event":
+                let windows = (event["rate_limit_info"] as? [String: Any])?["unifiedWindows"] as? [String: Any]
+                func utilization(_ key: String) -> Double? { (windows?[key] as? [String: Any])?["utilization"] as? Double }
+                limits = SubscriptionLimits(session: utilization("five_hour") ?? limits.session,
+                                            week: utilization("seven_day") ?? limits.week)
             case "result":
                 result = event
             default:
@@ -138,7 +145,10 @@ public struct ClaudeCLIClient: MessageSending {
             text = result["result"] as? String ?? ""
         }
         let usedModel = model ?? (result["modelUsage"] as? [String: Any])?.keys.first ?? requestedModel
-        return MessageResult(text: text, model: usedModel, stopReason: stop ?? "end_turn", usage: Usage())
+        let usage = (result["usage"] as? [String: Any])
+            .flatMap { try? JSONSerialization.data(withJSONObject: $0) }
+            .flatMap { try? JSONDecoder().decode(Usage.self, from: $0) } ?? Usage()
+        return MessageResult(text: text, model: usedModel, stopReason: stop ?? "end_turn", usage: usage, subscription: limits)
     }
 
     // MARK: Process

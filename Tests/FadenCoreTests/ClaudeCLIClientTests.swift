@@ -48,16 +48,34 @@ import Testing
         #expect(ClaudeCLIClient.environment(for: Self.notesRequest()) == ["CLAUDE_CODE_MAX_OUTPUT_TOKENS": "64000"])
     }
 
-    @Test func parsesTextModelAndZeroUsage() throws {
+    @Test func parsesTextModelUsageAndLimits() throws {
         let out = ClaudeCLIClient.Output(status: 0, stdout: Self.lines([
             #"{"type":"system","subtype":"init"}"#, Self.assistant,
-            ##"{"type":"result","subtype":"success","is_error":false,"stop_reason":"end_turn","result":"# Notes"}"##,
+            #"{"type":"rate_limit_event","rate_limit_info":{"unifiedWindows":{"five_hour":{"utilization":0.08},"seven_day":{"utilization":0.61}}}}"#,
+            ##"{"type":"result","subtype":"success","is_error":false,"stop_reason":"end_turn","result":"# Notes","usage":{"input_tokens":3,"output_tokens":900,"cache_creation_input_tokens":20000,"cache_read_input_tokens":100,"service_tier":"standard"}}"##,
         ]), stderr: Data())
         let result = try ClaudeCLIClient.parse(out, requestedModel: "x")
         #expect(result.text == "# Notes")
         #expect(result.model == "claude-opus-5-5")
         #expect(result.stopReason == "end_turn")
-        #expect(result.usage == Usage())
+        #expect(result.usage == Usage(inputTokens: 3, outputTokens: 900, cacheCreationInputTokens: 20000, cacheReadInputTokens: 100))
+        #expect(result.subscription == SubscriptionLimits(session: 0.08, week: 0.61))
+    }
+
+    @Test func subscriptionCallsCostNothingAndSummarizeTokensAndLimits() {
+        let usage = Usage(inputTokens: 1000, outputTokens: 500, cacheCreationInputTokens: 0, cacheReadInputTokens: 0)
+        let limits = SubscriptionLimits(session: 0.124, week: 0.61)
+        #expect(PaidCall(model: "claude-opus-5-5", usage: usage, subscription: limits).usd == 0)
+        #expect(PaidCall(model: "claude-opus-5-5", usage: usage).usd! > 0)
+
+        var state = PipelineState(audio: [], slides: [], userNotes: nil, styleID: "C", allowAdditions: true, language: nil)
+        state.notesCall = PaidCall(model: "claude-opus-5-5", usage: usage, subscription: SubscriptionLimits(session: 0.1, week: 0.6))
+        state.verifyCall = PaidCall(model: "claude-haiku-5-5", usage: usage, subscription: limits)
+        #expect(RunCost.summary(state) == "\(3000.formatted()) tokens · session 12% · week 61%")
+
+        let header = NotesHeader(date: .now, style: "C", slides: [], audio: [], userNotes: nil,
+                                 notesCall: state.notesCall!, verifyCall: state.verifyCall, verification: "ok").markdown()
+        #expect(header.contains("> Cost: Claude subscription, session 12% · week 61% used after the run (2000 in / 1000 out tokens)"))
     }
 
     @Test func structuredOutputBecomesTheText() throws {
@@ -102,6 +120,8 @@ import Testing
         let findings = try Verifier.parse(result.text)
         #expect(findings.contains { $0.quote.contains("50") }, "\(result.text)")
         #expect(result.model == Verifier.model)
+        #expect(result.usage.outputTokens > 0)
+        #expect((result.subscription?.week ?? 0) > 0, "\(String(describing: result.subscription))")
     }
 
     /// Runs a fake `claude` that echoes its stdin size and an env variable back as the result.
