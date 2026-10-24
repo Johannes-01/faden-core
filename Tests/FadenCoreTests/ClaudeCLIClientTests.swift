@@ -67,15 +67,29 @@ import Testing
         let limits = SubscriptionLimits(session: 0.124, week: 0.61)
         #expect(PaidCall(model: "claude-opus-5-5", usage: usage, subscription: limits).usd == 0)
         #expect(PaidCall(model: "claude-opus-5-5", usage: usage).usd! > 0)
+        #expect(PaidCall(model: "claude-opus-5-5", usage: usage, subscription: limits).apiUSD
+            == PaidCall(model: "claude-opus-5-5", usage: usage).usd)
 
+        // Opus: 1000 × $4 + 500 × $20 = $0.014; Haiku: 1000 × $0.10 + 500 × $0.50 = $0.00035.
         var state = PipelineState(audio: [], slides: [], userNotes: nil, styleID: "C", allowAdditions: true, language: nil)
         state.notesCall = PaidCall(model: "claude-opus-5-5", usage: usage, subscription: SubscriptionLimits(session: 0.1, week: 0.6))
         state.verifyCall = PaidCall(model: "claude-haiku-5-5", usage: usage, subscription: limits)
-        #expect(RunCost.summary(state) == "\(3000.formatted()) tokens · session 12% · week 61%")
+        #expect(state.costUSD == 0)
+        #expect(RunCost.summary(state) == "\(3000.formatted()) tokens · ≈ $0.01 at API prices · session 12% · week 61%")
 
         let header = NotesHeader(date: .now, style: "C", slides: [], audio: [], userNotes: nil,
                                  notesCall: state.notesCall!, verifyCall: state.verifyCall, verification: "ok").markdown()
-        #expect(header.contains("> Cost: Claude subscription, session 12% · week 61% used after the run (2000 in / 1000 out tokens)"))
+        #expect(header.contains("> Cost: Claude subscription, session 12% · week 61% used after the run · ≈ $0.01 at API prices (2000 in / 1000 out tokens)"))
+    }
+
+    @Test func subscriptionRunWithUnpricedModelOmitsAPIPrice() {
+        let limits = SubscriptionLimits(session: 0.1, week: 0.6)
+        var state = PipelineState(audio: [], slides: [], userNotes: nil, styleID: "C", allowAdditions: true, language: nil)
+        state.notesCall = PaidCall(model: "claude-unknown", usage: Usage(inputTokens: 10, outputTokens: 5), subscription: limits)
+        #expect(RunCost.summary(state) == "\(15.formatted()) tokens · session 10% · week 60%")
+        let header = NotesHeader(date: .now, style: "C", slides: [], audio: [], userNotes: nil,
+                                 notesCall: state.notesCall!, verifyCall: nil, verification: "ok").markdown()
+        #expect(!header.contains("API prices"))
     }
 
     @Test func structuredOutputBecomesTheText() throws {

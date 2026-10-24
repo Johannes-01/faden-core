@@ -77,16 +77,24 @@ public struct CostLedger: Sendable {
 
     /// Sums `usd` of records dated at or after `since` (all when nil). Undecodable lines are skipped.
     public func total(since: Date?) throws -> Double {
-        guard FileManager.default.fileExists(atPath: file.path) else { return 0 }
+        try records(since: since).reduce(0) { $0 + ($1.usd ?? 0) }
+    }
+
+    /// Like `total`, but every record priced at API prices from its tokens, so subscription runs (billed at $0)
+    /// count with what they would have cost with an API key. Records of unpriced models count as 0.
+    public func apiTotal(since: Date?) throws -> Double {
+        try records(since: since).reduce(0) { $0 + (Pricing.usd(model: $1.model, usage: $1.usage) ?? 0) }
+    }
+
+    private func records(since: Date?) throws -> [CostRecord] {
+        guard FileManager.default.fileExists(atPath: file.path) else { return [] }
         let data = try Data(contentsOf: file)
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        var sum = 0.0
-        for line in data.split(separator: 0x0A) {
-            guard let r = try? decoder.decode(CostRecord.self, from: Data(line)) else { continue }
-            if let since, r.date < since { continue }
-            sum += r.usd ?? 0
+        return data.split(separator: 0x0A).compactMap { line in
+            guard let r = try? decoder.decode(CostRecord.self, from: Data(line)) else { return nil }
+            if let since, r.date < since { return nil }
+            return r
         }
-        return sum
     }
 }

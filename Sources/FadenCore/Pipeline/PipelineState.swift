@@ -33,7 +33,10 @@ public struct PaidCall: Codable, Equatable, Sendable {
     }
 
     /// The call's price in USD, or nil when the model has no known price. Subscription calls cost nothing.
-    public var usd: Double? { subscription != nil ? 0 : Pricing.usd(model: model, usage: usage) }
+    public var usd: Double? { subscription != nil ? 0 : apiUSD }
+
+    /// What the call costs at API prices, also for a subscription call. nil when the model has no known price.
+    public var apiUSD: Double? { Pricing.usd(model: model, usage: usage) }
 }
 
 /// The pipeline's progress for one lecture, persisted as `.faden/state.json` before each stage.
