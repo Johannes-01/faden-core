@@ -411,6 +411,8 @@ public actor Pipeline {
         case AnthropicError.truncated: return "The notes were cut off at the output limit"
         case AnthropicError.streamIncomplete: return "The connection dropped before the notes were complete"
         case AnthropicError.network(let message): return "Network error: \(message)"
+        case ClaudeCLIError.notFound: return "The claude CLI was not found; install Claude Code or turn off the subscription setting"
+        case ClaudeCLIError.failed(let message): return "The claude CLI failed: \(message)"
         case StyleStoreError.notFound(let id): return "Note style \"\(id)\" not found"
         case StyleStoreError.malformed(let id): return "Note style \"\(id)\" could not be read"
         case SlideInputError.unreadablePDF(let name): return "Could not read the slides \"\(name)\""
