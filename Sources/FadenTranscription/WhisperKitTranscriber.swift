@@ -60,14 +60,20 @@ public actor WhisperKitTranscriber: Transcriber {
         }
         // No speech found in a longer file means the VAD is wrong about this recording (for
         // example a noise bed above quiet speech), so transcribe all of it instead of nothing.
+        // Each VAD chunk would otherwise detect its own language, and a mumbled one can come out
+        // as Dutch, so the language is detected once for the whole recording.
+        let detected = language == nil ? try await detectLanguage(pipe, samples: samples, speech: speech) : nil
         let options = DecodingOptions(
             task: .transcribe,
-            language: language,
+            language: language ?? detected,
             usePrefillPrompt: true,
-            detectLanguage: language == nil,
+            detectLanguage: language == nil && detected == nil,
             skipSpecialTokens: true,
             withoutTimestamps: false,
             clipTimestamps: speech.flatMap { [Float($0.start), Float($0.end)] },
+            // WhisperKit ends a window whose first token is unlikely, at every fallback temperature,
+            // and returns it empty. Quiet or distant speakers trip it, which lost 20–45 s stretches.
+            firstTokenLogProbThreshold: nil,
             chunkingStrategy: .vad)
         // Only the speech clips are decoded. WhisperKit reports segment times from the start of
         // the array (seek position, plus each VAD chunk's offset), so they are file positions.
@@ -83,7 +89,7 @@ public actor WhisperKitTranscriber: Transcriber {
             .sorted { $0.start < $1.start }
         return Transcript(
             segments: segments, markers: [],
-            language: language ?? Self.dominantLanguage(of: results),
+            language: language ?? detected ?? Self.dominantLanguage(of: results),
             model: modelName)
     }
 
@@ -96,6 +102,37 @@ public actor WhisperKitTranscriber: Transcriber {
     static func clean(_ text: String) -> String {
         let stripped = text.replacing(/<\|[^|>]*\|>/, with: "").trimmingCharacters(in: .whitespacesAndNewlines)
         return stripped.wholeMatch(of: /\[[A-Z_ ]+\]/) == nil ? stripped : ""
+    }
+
+    /// How many 30 s windows, spread over the speech, vote on the recording's language.
+    static let languageSamples = 5
+
+    /// The language most of `languageSamples` speech windows are detected as, or nil when there is no speech.
+    private func detectLanguage(_ pipe: WhisperKit, samples: [Float], speech: [SpeechClip]) async throws -> String? {
+        let rate = Double(WhisperKit.sampleRate)
+        let starts = Self.languageWindowStarts(speech: speech, count: Self.languageSamples)
+        var votes: [String: Int] = [:]
+        for start in starts {
+            let from = min(Int(start * rate), samples.count)
+            let window = Array(samples[from..<min(from + WhisperKit.sampleRate * 30, samples.count)])
+            votes[try await pipe.detectLangauge(audioArray: window).language, default: 0] += 1
+        }
+        return votes.max { ($0.value, $1.key) < ($1.value, $0.key) }?.key
+    }
+
+    /// Start times of `count` points spread evenly over the speech, measured in speech time so
+    /// that long silences don't attract windows.
+    static func languageWindowStarts(speech: [SpeechClip], count: Int) -> [Double] {
+        let total = speech.reduce(0) { $0 + $1.duration }
+        guard total > 0, count > 0 else { return [] }
+        return (0..<count).map { i in
+            var offset = total * (Double(i) + 0.5) / Double(count)
+            for clip in speech {
+                if offset <= clip.duration { return clip.start + offset }
+                offset -= clip.duration
+            }
+            return speech[speech.count - 1].end
+        }
     }
 
     /// VAD chunks detect their language separately; pick the one that carries the most text.
