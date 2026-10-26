@@ -10,8 +10,8 @@ public enum ClaudeCLIError: Error, Equatable, Sendable {
 /// Sends requests through the local Claude Code CLI (`claude -p`), so they run on the signed-in
 /// Claude subscription instead of an API key. For personal use only.
 ///
-/// The request's content blocks go to the CLI unchanged as one stream-json user message, so PDFs
-/// arrive as documents just as they do over the API. Tools, customizations (`--safe-mode`) and
+/// The request's content blocks go to the CLI unchanged as one stream-json user message, so slide
+/// images arrive just as they do over the API. Tools, customizations (`--safe-mode`) and
 /// session files are off, and `ANTHROPIC_API_KEY` is removed so the CLI can't fall back to API billing.
 /// Results carry the subscription's limit use, which prices the call at $0 (see `PaidCall.usd`).
 public struct ClaudeCLIClient: MessageSending {
@@ -93,7 +93,7 @@ public struct ClaudeCLIClient: MessageSending {
         let content = r.messages.flatMap(\.content).map { block -> ContentBlock in
             switch block {
             case .text(let text, _): .text(text, cache: false)
-            case .pdf(let base64, let title, _): .pdf(base64: base64, title: title, cache: false)
+            case .image(let base64, let mediaType, _): .image(base64: base64, mediaType: mediaType, cache: false)
             }
         }
         var data = try JSONEncoder().encode(Line(message: Message(content: content)))

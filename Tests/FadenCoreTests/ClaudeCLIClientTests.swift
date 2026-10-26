@@ -11,7 +11,7 @@ import Testing
         MessageRequest(
             model: "claude-opus-5-5", maxTokens: 64000, stream: true,
             system: [.text("Be precise.", cache: false)],
-            messages: [Message(content: [.pdf(base64: "QUJD", title: "deck.pdf", cache: true), .text("transcript", cache: false)])],
+            messages: [Message(content: [.image(base64: "QUJD", mediaType: "image/jpeg", cache: true), .text("transcript", cache: false)])],
             outputConfig: OutputConfig(effort: "high"), fallbacks: "default", betaHeaders: ["x"])
     }
 
@@ -32,7 +32,7 @@ import Testing
         #expect(args[args.firstIndex(of: "--json-schema")! + 1] == #"{"type":"object"}"#)
     }
 
-    @Test func inputIsOneUserLineWithDocumentsAndNoCacheMarks() throws {
+    @Test func inputIsOneUserLineWithImagesAndNoCacheMarks() throws {
         let data = try ClaudeCLIClient.input(for: Self.notesRequest())
         #expect(data.last == 0x0A)
         let json = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
@@ -40,7 +40,7 @@ import Testing
         let message = try #require(json["message"] as? [String: Any])
         #expect(message["role"] as? String == "user")
         let content = try #require(message["content"] as? [[String: Any]])
-        #expect(content.map { $0["type"] as? String } == ["document", "text"])
+        #expect(content.map { $0["type"] as? String } == ["image", "text"])
         #expect(content.allSatisfy { $0["cache_control"] == nil })
     }
 

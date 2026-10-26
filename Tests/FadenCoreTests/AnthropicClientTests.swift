@@ -174,14 +174,14 @@ struct AnthropicClientTests {
         #expect((format["schema"] as? [String: Any])?["type"] as? String == "object")
     }
 
-    @Test func pdfBlockEncoding() throws {
-        let block = ContentBlock.pdf(base64: "QUJD", title: "Slides", cache: true)
+    @Test func imageBlockEncoding() throws {
+        let block = ContentBlock.image(base64: "QUJD", mediaType: "image/jpeg", cache: true)
         let obj = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(block)) as? [String: Any])
-        #expect(obj["type"] as? String == "document")
-        #expect(obj["title"] as? String == "Slides")
+        #expect(obj["type"] as? String == "image")
+        #expect(obj["title"] == nil)
         let source = try #require(obj["source"] as? [String: Any])
         #expect(source["type"] as? String == "base64")
-        #expect(source["media_type"] as? String == "application/pdf")
+        #expect(source["media_type"] as? String == "image/jpeg")
         #expect(source["data"] as? String == "QUJD")
         #expect((obj["cache_control"] as? [String: String])?["type"] == "ephemeral")
 

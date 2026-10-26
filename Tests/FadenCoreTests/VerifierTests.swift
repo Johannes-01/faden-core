@@ -56,8 +56,8 @@ import Testing
         let json = try body(request)
         let messages = try #require(json["messages"] as? [[String: Any]])
         let content = try #require(messages.first?["content"] as? [[String: Any]])
-        #expect(content.map { $0["type"] as? String } == ["document", "text", "text"])
-        #expect(content[0]["title"] as? String == "deck.pdf")
+        #expect(content.map { $0["type"] as? String } == ["text", "text", "text"])
+        #expect((content[0]["text"] as? String)?.hasPrefix("Slides deck.pdf (text only):\n") == true)
         // The cache is per model and the notes call uses another one, so a cache write here is never read.
         #expect(content.allSatisfy { $0["cache_control"] == nil })
         #expect(content[1]["text"] as? String == transcript.markdown())
