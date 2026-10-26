@@ -27,6 +27,7 @@ import Testing
         #expect(json["fallbacks"] == nil)
         #expect(request.betaHeaders.isEmpty)
 
+        #expect((json["output_config"] as? [String: Any])?["effort"] as? String == "low")
         let format = try #require((json["output_config"] as? [String: Any])?["format"] as? [String: Any])
         #expect(format["type"] as? String == "json_schema")
         let schema = try #require(format["schema"] as? [String: Any])

@@ -36,7 +36,8 @@ public enum Verifier {
             stream: false,
             system: [.text(try systemPrompt(), cache: false)],
             messages: [Message(content: content)],
-            outputConfig: OutputConfig(format: JSONSchemaFormat(schema: schema)))
+            // Low effort: matching lines against cited sources is a lookup, and thinking was most of the output.
+            outputConfig: OutputConfig(effort: "low", format: JSONSchemaFormat(schema: schema)))
     }
 
     /// A range wider than this (e.g. a summary citing `Folie 3–30`) adds only its two ends.
