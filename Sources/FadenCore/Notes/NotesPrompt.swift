@@ -38,9 +38,11 @@ public enum NotesPrompt {
             system += "\n\n" + languageInstruction(code)
         }
 
-        // Stable, cacheable PDFs first; the transcript changes with every recording.
-        var content = try SlideInput.blocks(for: i.slides)
-        if let url = i.userNotes, let notes = try readNotes(url) {
+        // Stable, cacheable PDFs first; the transcript changes with every recording. Notes that are a PDF
+        // (e.g. handwritten) go like slides: page text plus images of the figures.
+        let notesPDF = i.userNotes.flatMap { SlideInput.isPDF($0) ? $0 : nil }
+        var content = try SlideInput.blocks(for: i.slides, notes: notesPDF)
+        if let url = i.userNotes, notesPDF == nil, let notes = try readNotes(url) {
             content.append(.text("My own notes from the lecture (label content from here ✍️):\n" + notes, cache: false))
         }
         content.append(.text(i.transcript.markdown(), cache: false))

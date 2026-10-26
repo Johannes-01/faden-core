@@ -18,20 +18,22 @@ import Testing
     /// Writes a 400×300 pt PDF with one page per string, each drawn as real (extractable) text; an empty
     /// string gives a page with only a filled rectangle. Pages in `figures` also get a 600×240 px image
     /// drawn at 300×120 pt (2 px per pt), pages in `diagrams` three stroked boxes, and with `logo` every
-    /// page gets the same small image in the corner.
+    /// page gets the same small image in the corner. Figures differ by page and `variant`, unless
+    /// `repeatFigure` draws the same one on every page.
     private func makePDF(_ pages: [String], named name: String, in dir: URL, figures: Set<Int> = [],
-                         diagrams: Set<Int> = [], logo: Bool = false) throws -> URL {
+                         diagrams: Set<Int> = [], logo: Bool = false, variant: Int = 0,
+                         repeatFigure: Bool = false) throws -> URL {
         let url = dir.appendingPathComponent(name)
         var box = CGRect(x: 0, y: 0, width: 400, height: 300)
         let ctx = try #require(CGContext(url as CFURL, mediaBox: &box, nil))
         let font = CTFontCreateWithName("Helvetica" as CFString, 18, nil)
         for (i, text) in pages.enumerated() {
             ctx.beginPDFPage(nil)
-            if figures.contains(i) { ctx.draw(try image(width: 600, height: 240), in: CGRect(x: 50, y: 20, width: 300, height: 120)) }
+            if figures.contains(i) { ctx.draw(try image(width: 600, height: 240, seed: variant * 100 + (repeatFigure ? 0 : i)), in: CGRect(x: 50, y: 20, width: 300, height: 120)) }
             if diagrams.contains(i) {
                 for x in [40, 160, 280] { ctx.stroke(CGRect(x: x, y: 30, width: 60, height: 40)) }
             }
-            if logo { ctx.draw(try image(width: 30, height: 30), in: CGRect(x: 360, y: 260, width: 30, height: 30)) }
+            if logo { ctx.draw(try image(width: 30, height: 30, seed: 999), in: CGRect(x: 360, y: 260, width: 30, height: 30)) }
             guard !text.isEmpty else {
                 // An image-only page: a drawn shape, no text layer.
                 ctx.setFillColor(CGColor(red: 0.2, green: 0.4, blue: 0.8, alpha: 1))
@@ -49,14 +51,14 @@ import Testing
         return url
     }
 
-    /// A raster image with some noise, so its JPEG isn't trivially small.
-    private func image(width: Int, height: Int) throws -> CGImage {
+    /// A raster image with some noise, so its JPEG isn't trivially small; `seed` varies the pattern.
+    private func image(width: Int, height: Int, seed: Int) throws -> CGImage {
         let ctx = try #require(CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
                                          space: CGColorSpaceCreateDeviceRGB(),
                                          bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue))
         for x in stride(from: 0, to: width, by: 10) {
             for y in stride(from: 0, to: height, by: 10) {
-                ctx.setFillColor(CGColor(red: CGFloat((x * 7 + y * 3) % 255) / 255, green: CGFloat(x % 255) / 255,
+                ctx.setFillColor(CGColor(red: CGFloat((x * 7 + y * 3 + seed * 37) % 255) / 255, green: CGFloat(x % 255) / 255,
                                          blue: CGFloat(y % 255) / 255, alpha: 1))
                 ctx.fill(CGRect(x: x, y: y, width: 10, height: 10))
             }
@@ -305,7 +307,7 @@ import Testing
     @Test func oversizedFiguresDegradeDecksToText() throws {
         let dir = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
-        let small = try makePDF(["Only page"], named: "small.pdf", in: dir, figures: [0])
+        let small = try makePDF(["Only page"], named: "small.pdf", in: dir, figures: [0], variant: 1)
         let large = try makePDF(["Handshake basics", "Four way exchange"], named: "large.pdf", in: dir, figures: [0, 1])
         let full = try SlideInput.blocks(for: [large, small], maxTotalBytes: .max)
         let figureBytes = full.reduce(0) { sum, block in
@@ -324,9 +326,9 @@ import Testing
     @Test func tooManyImagesDegradeDecksWithMostFigures() throws {
         let dir = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
-        let one = try makePDF(["O1"], named: "one.pdf", in: dir, figures: [0])
+        let one = try makePDF(["O1"], named: "one.pdf", in: dir, figures: [0], variant: 1)
         let three = try makePDF(["T1", "T2", "T3"], named: "three.pdf", in: dir, figures: [0, 1, 2])
-        let two = try makePDF(["W1", "W2"], named: "two.pdf", in: dir, figures: [0, 1])
+        let two = try makePDF(["W1", "W2"], named: "two.pdf", in: dir, figures: [0, 1], variant: 2)
 
         func images(_ blocks: [ContentBlock]) -> Int { kinds(blocks).filter { $0 == "image" }.count }
 
@@ -357,6 +359,58 @@ import Testing
         #expect(SlideInput.defaultMaxTotalBytes == 22_000_000)
         #expect(SlideInput.defaultMaxTotalBytes * 4 / 3 < 32_000_000)
         #expect(SlideInput.defaultMaxTotalImages == 600)
+    }
+
+    @Test func repeatedFigureIsReferredToInsteadOfSentAgain() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let deck = try makePDF(["A", "B", "C"], named: "deck.pdf", in: dir, figures: [0, 2], repeatFigure: true)
+        let other = try makePDF(["X"], named: "other.pdf", in: dir, figures: [0])
+
+        let blocks = try SlideInput.blocks(for: [deck])
+        #expect(kinds(blocks) == ["Slides deck.pdf (text per page; a page with figures is followed by an image of them):",
+                                  "image", "--- Slide 2 ---"])
+        guard case .text(let rest, _) = blocks[2] else { return }
+        #expect(rest == "--- Slide 2 ---\nB\n\n--- Slide 3 ---\nC\n(same figure as Slide 1 above)")
+
+        // Across decks the reference names the deck; `other` has the same figure on its first page.
+        let both = try SlideInput.blocks(for: [deck, other])
+        #expect(kinds(both).filter { $0 == "image" }.count == 1)
+        guard case .text(let last, _) = try #require(both.last) else { return }
+        #expect(last == "Slides other.pdf (text per page; a page with figures is followed by an image of them):\n"
+            + "--- Slide 1 ---\nX\n(same figure as Slide 1 of deck.pdf above)")
+    }
+
+    @Test func pdfNotesAreSentLikeSlidesAfterThem() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let deck = try makePDF(["Intro"], named: "deck.pdf", in: dir)
+        // No extension, like an exported notes file; it's recognised by its content.
+        let notes = try makePDF(["Typed line", ""], named: "notes-26-10-26", in: dir, figures: [1], variant: 5)
+        #expect(SlideInput.isPDF(notes))
+        #expect(!SlideInput.isPDF(deck.deletingLastPathComponent().appendingPathComponent("missing")))
+
+        let content = try userContent(try NotesPrompt.request(inputs(slides: [deck], userNotes: notes)))
+
+        #expect(content.map { $0["type"] as? String } == ["text", "text", "image", "text"])
+        #expect(content[0]["text"] as? String == "Slides deck.pdf (text only):\n--- Slide 1 ---\nIntro")
+        #expect(content[1]["text"] as? String
+            == "My own notes from the lecture (label content from here ✍️), notes-26-10-26 "
+            + "(text per page; a page with figures is followed by an image of them):\n"
+            + "--- Page 1 ---\nTyped line\n\n--- Page 2 ---")
+        #expect(content.map { $0["cache_control"] != nil } == [false, false, true, false])
+        #expect(content[3]["text"] as? String == transcript.markdown())
+    }
+
+    @Test func textNotesAreNotTakenForPDFs() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let notes = dir.appendingPathComponent("notes.pdf")
+        try "PDF- looks like one but isn't".write(to: notes, atomically: true, encoding: .utf8)
+        #expect(!SlideInput.isPDF(notes))
+        let content = try userContent(try NotesPrompt.request(inputs(userNotes: notes)))
+        #expect(content.first?["text"] as? String
+            == "My own notes from the lecture (label content from here ✍️):\nPDF- looks like one but isn't")
     }
 
     @Test func noDecksGiveNoBlocks() throws {

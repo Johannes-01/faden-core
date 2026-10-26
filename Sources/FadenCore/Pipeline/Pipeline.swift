@@ -415,7 +415,7 @@ public actor Pipeline {
         case ClaudeCLIError.failed(let message): return "The claude CLI failed: \(message)"
         case StyleStoreError.notFound(let id): return "Note style \"\(id)\" not found"
         case StyleStoreError.malformed(let id): return "Note style \"\(id)\" could not be read"
-        case SlideInputError.unreadablePDF(let name): return "Could not read the slides \"\(name)\""
+        case SlideInputError.unreadablePDF(let name): return "Could not read the PDF \"\(name)\""
         default: return error.localizedDescription
         }
     }

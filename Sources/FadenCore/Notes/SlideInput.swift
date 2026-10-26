@@ -5,7 +5,7 @@ public enum SlideInputError: Error, Equatable {
     case unreadablePDF(String)
 }
 
-/// Turns slide PDFs into request content blocks.
+/// Turns slide PDFs (and the student's notes, when they are a PDF) into request content blocks.
 public enum SlideInput {
     /// The default limit on the slides' combined raw size (page text plus figure JPEGs). Images are sent
     /// base64-encoded, which is about 4/3 of the raw size, and the whole request must stay under the
@@ -19,18 +19,22 @@ public enum SlideInput {
     /// Each deck is sent as its pages' text, one `--- Slide N ---` section per page, under a header with
     /// the deck's file name. A page with a figure (an image, diagram or table) is followed by one image
     /// block showing its figures cropped from the page; text-only pages cost no image. This is far cheaper
-    /// than a PDF document, which the API turns into a full page image plus text for every page.
+    /// than a PDF document, which the API turns into a full page image plus text for every page. A figure
+    /// identical to an earlier one (a repeated slide) is referred to instead of sent again.
     ///
-    /// While the slides exceed `maxTotalBytes`, the deck whose figures are largest is sent as text only;
+    /// The student's own notes, when they are a PDF, follow the slides in the same form, with
+    /// `--- Page N ---` sections under the ✍️ notes header, and share the slides' limits.
+    ///
+    /// While the PDFs exceed `maxTotalBytes`, the one whose figures are largest is sent as text only;
     /// then, while they exceed `maxTotalImages`, the one with the most figures is.
     /// With `cacheLast`, the last block is marked for caching, so re-runs of the notes call reuse the prefix.
     public static func blocks(for pdfs: [URL],
+                              notes: URL? = nil,
                               maxTotalBytes: Int = defaultMaxTotalBytes,
                               maxTotalImages: Int = defaultMaxTotalImages,
                               cacheLast: Bool = true) throws -> [ContentBlock] {
-        var decks = try pdfs.map { url in
-            Deck(name: url.lastPathComponent, texts: try pageTexts(url), figures: try SlideFigures.figures(url))
-        }
+        var decks = try pdfs.map { try Deck(url: $0, kind: .slides) }
+        if let notes { decks.append(try Deck(url: notes, kind: .notes)) }
 
         var totalBytes = decks.reduce(0) { $0 + $1.textBytes + $1.figureBytes }
         var totalImages = decks.reduce(0) { $0 + $1.figureCount }
@@ -50,11 +54,19 @@ public enum SlideInput {
             decks[i].figures = decks[i].figures.map { _ in nil }
         }
 
-        var blocks = decks.flatMap(\.blocks)
+        var sent: [Data: String] = [:]
+        var blocks = decks.flatMap { $0.blocks(sent: &sent, namesDeck: pdfs.count > 1) }
         if cacheLast, let last = blocks.indices.last {
             blocks[last] = blocks[last].cached()
         }
         return blocks
+    }
+
+    /// Whether the file is a PDF, by its content rather than its name.
+    public static func isPDF(_ url: URL) -> Bool {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
+        defer { try? handle.close() }
+        return (try? handle.read(upToCount: 5)) == Data("%PDF-".utf8)
     }
 
     /// Marks pages without a text layer (e.g. scanned or image-only), so the model doesn't invent content.
@@ -71,27 +83,53 @@ public enum SlideInput {
 }
 
 private struct Deck {
+    enum Kind { case slides, notes }
+
     var name: String
+    var kind: Kind
     var texts: [String]
     /// One JPEG per page, nil for pages without a figure.
     var figures: [Data?]
+
+    init(url: URL, kind: Kind) throws {
+        name = url.lastPathComponent
+        self.kind = kind
+        texts = try SlideInput.pageTexts(url)
+        figures = try SlideFigures.figures(url)
+    }
 
     var textBytes: Int { texts.reduce(0) { $0 + $1.utf8.count } }
     var figureBytes: Int { figures.reduce(0) { $0 + ($1?.count ?? 0) } }
     var figureCount: Int { figures.count { $0 != nil } }
 
-    /// Text sections, each run closed by the image of the page it ends with.
-    var blocks: [ContentBlock] {
-        let header = figureCount == 0
-            ? "Slides \(name) (text only):\n"
-            : "Slides \(name) (text per page; a page with figures is followed by an image of them):\n"
+    private var pageWord: String { kind == .slides ? "Slide" : "Page" }
+
+    /// What a later page calls this deck's page `n` when it shows the same figure.
+    private func reference(_ n: Int, namesDeck: Bool) -> String {
+        switch kind {
+        case .slides: namesDeck ? "Slide \(n) of \(name)" : "Slide \(n)"
+        case .notes: "Page \(n) of my notes"
+        }
+    }
+
+    /// Text sections, each run closed by the image of the page it ends with. `sent` maps the figures
+    /// sent so far to their reference, so a repeated figure is referred to instead of sent again.
+    func blocks(sent: inout [Data: String], namesDeck: Bool) -> [ContentBlock] {
+        let format = figureCount == 0 ? "text only" : "text per page; a page with figures is followed by an image of them"
+        let header = switch kind {
+        case .slides: "Slides \(name) (\(format)):\n"
+        case .notes: "My own notes from the lecture (label content from here ✍️), \(name) (\(format)):\n"
+        }
         var blocks: [ContentBlock] = []
         var sections: [String] = []
         for (i, text) in texts.enumerated() {
             let figure = i < figures.count ? figures[i] : nil
-            let body = text.isEmpty ? (figure == nil ? "\n" + SlideInput.noTextMarker : "") : "\n" + text
-            sections.append("--- Slide \(i + 1) ---" + body)
-            if let figure {
+            let earlier = figure.flatMap { sent[$0] }
+            var body = text.isEmpty ? (figure == nil ? "\n" + SlideInput.noTextMarker : "") : "\n" + text
+            if let earlier { body += "\n(same figure as \(earlier) above)" }
+            sections.append("--- \(pageWord) \(i + 1) ---" + body)
+            if let figure, earlier == nil {
+                sent[figure] = reference(i + 1, namesDeck: namesDeck)
                 blocks.append(.text((blocks.isEmpty ? header : "") + sections.joined(separator: "\n\n"), cache: false))
                 blocks.append(.image(base64: figure.base64EncodedString(), mediaType: "image/jpeg", cache: false))
                 sections = []
