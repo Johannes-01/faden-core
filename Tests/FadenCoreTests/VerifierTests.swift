@@ -77,6 +77,28 @@ import Testing
         }
     }
 
+    @Test func citedSlidesReadsEveryLabelFormWithNeighbours() {
+        let notes = """
+            > Labels: 📄 slides · 🗣 lecture · 💡 model addition
+            - Point 📄 Folie 12
+            - Range 📄 Slide 4–5
+            | Row | 📄 Folie 30 |
+            - Summary 📄 Folie 3–30
+            - List 📄 Folie 7, 9 🗣 [00:01:02]
+            - Named 📄 a.pdf, Folie 2
+            - Digit in the name 📄 b 2.pdf, Folie 20
+            """
+        let cited = Verifier.citedSlides(in: notes, decks: ["a.pdf", "b 2.pdf"])
+        // Unnamed labels count for both decks: 11–13, 3–6, 29–31, the ends of 3–30 (2–4, 29–31), 6–10.
+        let common = Set(2...13).union(29...31)
+        #expect(cited["a.pdf"] == common.union([1]))
+        #expect(cited["b 2.pdf"] == common.union(19...21))
+    }
+
+    @Test func notesWithoutSlideLabelsCiteNothing() {
+        #expect(Verifier.citedSlides(in: "- Said 🗣 [00:01:02] at 10 past\n- Mine ✍️", decks: ["a.pdf"]).isEmpty)
+    }
+
     // MARK: - Parse
 
     @Test func parseDecodesFindings() throws {

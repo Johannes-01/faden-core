@@ -25,16 +25,25 @@ public enum SlideInput {
     /// The student's own notes, when they are a PDF, follow the slides in the same form, with
     /// `--- Page N ---` sections under the ✍️ notes header, and share the slides' limits.
     ///
-    /// While the PDFs exceed `maxTotalBytes`, the one whose figures are largest is sent as text only;
-    /// then, while they exceed `maxTotalImages`, the one with the most figures is.
+    /// `includeFigure(file name, page)` picks the pages whose figures are sent (pages counted from 1); the
+    /// others say that their figure isn't included. Then, while the PDFs exceed `maxTotalBytes`, the one
+    /// whose figures are largest is sent as text only; then, while they exceed `maxTotalImages`, the one
+    /// with the most figures is.
     /// With `cacheLast`, the last block is marked for caching, so re-runs of the notes call reuse the prefix.
     public static func blocks(for pdfs: [URL],
                               notes: URL? = nil,
                               maxTotalBytes: Int = defaultMaxTotalBytes,
                               maxTotalImages: Int = defaultMaxTotalImages,
+                              includeFigure: (String, Int) -> Bool = { _, _ in true },
                               cacheLast: Bool = true) throws -> [ContentBlock] {
         var decks = try pdfs.map { try Deck(url: $0, kind: .slides) }
         if let notes { decks.append(try Deck(url: notes, kind: .notes)) }
+        for d in decks.indices {
+            for (i, figure) in decks[d].figures.enumerated() where figure != nil && !includeFigure(decks[d].name, i + 1) {
+                decks[d].figures[i] = nil
+                decks[d].omitted.insert(i)
+            }
+        }
 
         var totalBytes = decks.reduce(0) { $0 + $1.textBytes + $1.figureBytes }
         var totalImages = decks.reduce(0) { $0 + $1.figureCount }
@@ -88,8 +97,10 @@ private struct Deck {
     var name: String
     var kind: Kind
     var texts: [String]
-    /// One JPEG per page, nil for pages without a figure.
+    /// One JPEG per page, nil for pages without a figure or whose figure is left out.
     var figures: [Data?]
+    /// Pages (from 0) whose figure was left out on purpose; they say so.
+    var omitted: Set<Int> = []
 
     init(url: URL, kind: Kind) throws {
         name = url.lastPathComponent
@@ -126,7 +137,8 @@ private struct Deck {
             let figure = i < figures.count ? figures[i] : nil
             let earlier = figure.flatMap { sent[$0] }
             var body = text.isEmpty ? (figure == nil ? "\n" + SlideInput.noTextMarker : "") : "\n" + text
-            if let earlier { body += "\n(same figure as \(earlier) above)" }
+            if let earlier { body += "\n(This page shows exactly the same figure as \(earlier); see the image after \(earlier) above.)" }
+            if omitted.contains(i) { body += "\n(its figure isn't included here)" }
             sections.append("--- \(pageWord) \(i + 1) ---" + body)
             if let figure, earlier == nil {
                 sent[figure] = reference(i + 1, namesDeck: namesDeck)

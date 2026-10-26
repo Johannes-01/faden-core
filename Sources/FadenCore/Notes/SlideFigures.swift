@@ -1,4 +1,5 @@
 import CoreGraphics
+import CryptoKit
 import Foundation
 import ImageIO
 import UniformTypeIdentifiers
@@ -12,8 +13,9 @@ enum SlideFigures {
     static let minPaths = 3
     /// Paths smaller than this in both directions (bullets, tiny icons) don't count towards `minPaths`.
     static let minPathSize: CGFloat = 8
-    /// Images and paths at the same place on more than half of a deck's pages (logos, header bars) are
-    /// the template, not content. Only applied to decks with at least this many pages.
+    /// The same image, or a path, at the same place on more than half of a deck's pages (logos, header
+    /// bars) is the template, not content. Images must have the same content too, so a scanned deck with
+    /// a full-page image on every page keeps them all. Only applied to decks with at least this many pages.
     static let templateMinPages = 4
     /// Every image stays within 2000 px per side, the API's limit once a request has more than 20 images.
     static let maxEdge: CGFloat = 2000
@@ -34,7 +36,7 @@ enum SlideFigures {
         let template = templateRects(marks.compactMap { $0 })
         return zip(pages, marks).map { page, marks -> Data? in
             guard let page, let marks else { return nil }
-            let images = marks.images.filter { !template.contains(key($0.rect)) }
+            let images = marks.images.filter { !template.contains(key($0)) }
             let paths = marks.paths.filter { !template.contains(key($0)) }
             let countedPaths = paths.filter { $0.width >= minPathSize || $0.height >= minPathSize }
             guard !images.isEmpty || countedPaths.count >= minPaths else { return nil }
@@ -52,11 +54,15 @@ enum SlideFigures {
         [r.minX, r.minY, r.width, r.height].map { Int($0.rounded()) }
     }
 
+    private static func key(_ image: Marks.Image) -> [Int] {
+        key(image.rect) + [image.content]
+    }
+
     private static func templateRects(_ pages: [Marks]) -> Set<[Int]> {
         guard pages.count >= templateMinPages else { return [] }
         var counts: [[Int]: Int] = [:]
         for page in pages {
-            for k in Set(page.images.map { key($0.rect) } + page.paths.map(key)) { counts[k, default: 0] += 1 }
+            for k in Set(page.images.map(key) + page.paths.map(key)) { counts[k, default: 0] += 1 }
         }
         return Set(counts.filter { $0.value * 2 > pages.count }.keys)
     }
@@ -100,7 +106,12 @@ enum SlideFigures {
 /// The images and painted paths a page draws, in page space. Form XObjects are followed; inline
 /// images and shadings are ignored (rare on slides, and shadings are mostly backgrounds).
 private final class Marks {
-    struct Image { var rect: CGRect; var scale: CGFloat }
+    struct Image {
+        var rect: CGRect
+        var scale: CGFloat
+        /// Identifies the image's data, so the same image on several pages can be recognised.
+        var content: Int
+    }
 
     var images: [Image] = []
     var paths: [CGRect] = []
@@ -149,7 +160,10 @@ private final class Marks {
                 let rect = CGRect(x: 0, y: 0, width: 1, height: 1).applying(ctm)
                 var width: CGPDFInteger = 0
                 CGPDFDictionaryGetInteger(dict, "Width", &width)
-                images.append(Image(rect: rect, scale: rect.width > 0 ? CGFloat(width) / rect.width : 0))
+                var format = CGPDFDataFormat.raw
+                let digest = CGPDFStreamCopyData(stream, &format).map { SHA256.hash(data: $0 as Data) }
+                let content = digest.map { Data($0).prefix(8).reduce(0) { $0 << 8 | Int($1) } } ?? 0
+                images.append(Image(rect: rect, scale: rect.width > 0 ? CGFloat(width) / rect.width : 0, content: content))
             case "Form" where depth < 8:
                 var formResources: CGPDFDictionaryRef?
                 CGPDFDictionaryGetDictionary(dict, "Resources", &formResources)

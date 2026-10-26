@@ -304,6 +304,15 @@ import Testing
         #expect(try pixelSize(base64) == CGSize(width: 624, height: 264))
     }
 
+    @Test func differentImagesAtTheSamePlaceOnEveryPageAreAllFigures() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        // Like a scanned deck: an image in the same place on every page, but a different one each time.
+        let deck = try makePDF(["P1", "P2", "P3", "P4", "P5"], named: "scan.pdf", in: dir, figures: Set(0..<5))
+
+        #expect(kinds(try SlideInput.blocks(for: [deck])).filter { $0 == "image" }.count == 5)
+    }
+
     @Test func oversizedFiguresDegradeDecksToText() throws {
         let dir = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -371,14 +380,16 @@ import Testing
         #expect(kinds(blocks) == ["Slides deck.pdf (text per page; a page with figures is followed by an image of them):",
                                   "image", "--- Slide 2 ---"])
         guard case .text(let rest, _) = blocks[2] else { return }
-        #expect(rest == "--- Slide 2 ---\nB\n\n--- Slide 3 ---\nC\n(same figure as Slide 1 above)")
+        #expect(rest == "--- Slide 2 ---\nB\n\n--- Slide 3 ---\nC\n"
+            + "(This page shows exactly the same figure as Slide 1; see the image after Slide 1 above.)")
 
         // Across decks the reference names the deck; `other` has the same figure on its first page.
         let both = try SlideInput.blocks(for: [deck, other])
         #expect(kinds(both).filter { $0 == "image" }.count == 1)
         guard case .text(let last, _) = try #require(both.last) else { return }
         #expect(last == "Slides other.pdf (text per page; a page with figures is followed by an image of them):\n"
-            + "--- Slide 1 ---\nX\n(same figure as Slide 1 of deck.pdf above)")
+            + "--- Slide 1 ---\nX\n(This page shows exactly the same figure as Slide 1 of deck.pdf; "
+            + "see the image after Slide 1 of deck.pdf above.)")
     }
 
     @Test func pdfNotesAreSentLikeSlidesAfterThem() throws {
@@ -411,6 +422,22 @@ import Testing
         let content = try userContent(try NotesPrompt.request(inputs(userNotes: notes)))
         #expect(content.first?["text"] as? String
             == "My own notes from the lecture (label content from here ✍️):\nPDF- looks like one but isn't")
+    }
+
+    @Test func checkSendsFiguresOnlyForCitedSlidesAndTheirNeighbours() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let deck = try makePDF(["S1", "S2", "S3", "S4", "S5"], named: "deck.pdf", in: dir, figures: [0, 1, 3, 4])
+
+        let request = try Verifier.request(notes: "- Claim 📄 Folie 1", transcript: transcript, slides: [deck])
+        let content = try userContent(request)
+
+        // Slides 1 and 2 (cited and its neighbour) get images; 4 and 5 only say they have a figure.
+        #expect(content.map { $0["type"] as? String } == ["text", "image", "text", "image", "text", "text", "text"])
+        #expect(content[4]["text"] as? String == "--- Slide 3 ---\nS3\n\n"
+            + "--- Slide 4 ---\nS4\n(its figure isn't included here)\n\n"
+            + "--- Slide 5 ---\nS5\n(its figure isn't included here)")
+        #expect(content.allSatisfy { $0["cache_control"] == nil })
     }
 
     @Test func noDecksGiveNoBlocks() throws {
