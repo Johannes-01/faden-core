@@ -23,7 +23,10 @@ public enum Verifier {
     public static func request(notes: String, transcript: Transcript, slides: [URL]) throws -> MessageRequest {
         // Slides first, then the transcript, then the notes under test. Nothing is cached: the cache is
         // per model, so the notes call's cached slides can't be read here, and a check runs once per lecture.
-        var content = try SlideInput.blocks(for: slides, cacheLast: false)
+        // Every slide's text is sent, but figures only for the slides the notes cite and their neighbours.
+        let cited = citedSlides(in: notes, decks: slides.map(\.lastPathComponent))
+        var content = try SlideInput.blocks(for: slides, includeFigure: { cited[$0]?.contains($1) == true },
+                                            cacheLast: false)
         content.append(.text(transcript.markdown(), cache: false))
         content.append(.text("Notes to check:\n\n" + notes, cache: false))
 
@@ -33,7 +36,35 @@ public enum Verifier {
             stream: false,
             system: [.text(try systemPrompt(), cache: false)],
             messages: [Message(content: content)],
-            outputConfig: OutputConfig(format: JSONSchemaFormat(schema: schema)))
+            // Low effort: matching lines against cited sources is a lookup, and thinking was most of the output.
+            outputConfig: OutputConfig(effort: "low", format: JSONSchemaFormat(schema: schema)))
+    }
+
+    /// A range wider than this (e.g. a summary citing `Folie 3–30`) adds only its two ends.
+    static let maxCitedRange = 10
+
+    /// The pages each deck's 📄 labels cite, plus the pages next to them, since the check accepts a
+    /// slightly wrong slide number. A label naming a deck's file counts for that deck, one without a
+    /// file name for every deck.
+    static func citedSlides(in notes: String, decks: [String]) -> [String: Set<Int>] {
+        var cited: [String: Set<Int>] = [:]
+        let label = /📄([^\n|📄🗣💡✍⚠]*)/
+        let number = /(\d+)(?:\s*[–—-]\s*(\d+))?/
+        for match in notes.matches(of: label) {
+            var text = String(match.1)
+            let named = decks.filter { text.contains($0) }
+            for name in named { text = text.replacingOccurrences(of: name, with: " ") }
+            var pages = Set<Int>()
+            for n in text.matches(of: number) {
+                guard let first = Int(n.1) else { continue }
+                let last = n.2.flatMap { Int($0) } ?? first
+                let range = min(first, last)...max(first, last)
+                pages.formUnion(range.count > maxCitedRange + 1 ? [range.lowerBound, range.upperBound] : Set(range))
+            }
+            let near = pages.flatMap { [$0 - 1, $0, $0 + 1] }
+            for name in named.isEmpty ? decks : named { cited[name, default: []].formUnion(near) }
+        }
+        return cited
     }
 
     public static func parse(_ text: String) throws -> [Finding] {

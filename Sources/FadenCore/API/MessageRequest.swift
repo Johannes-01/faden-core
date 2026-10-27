@@ -57,9 +57,9 @@ public struct OutputConfig: Encodable, Sendable {
 
 public enum ContentBlock: Encodable, Sendable {
     case text(String, cache: Bool)
-    case pdf(base64: String, title: String, cache: Bool)
+    case image(base64: String, mediaType: String, cache: Bool)
 
-    private enum CodingKeys: String, CodingKey { case type, text, source, title, cacheControl = "cache_control" }
+    private enum CodingKeys: String, CodingKey { case type, text, source, cacheControl = "cache_control" }
     private enum SourceKeys: String, CodingKey { case type, mediaType = "media_type", data }
     private struct CacheControl: Encodable { let type = "ephemeral" }
 
@@ -70,13 +70,12 @@ public enum ContentBlock: Encodable, Sendable {
             try c.encode("text", forKey: .type)
             try c.encode(text, forKey: .text)
             if cache { try c.encode(CacheControl(), forKey: .cacheControl) }
-        case .pdf(let base64, let title, let cache):
-            try c.encode("document", forKey: .type)
+        case .image(let base64, let mediaType, let cache):
+            try c.encode("image", forKey: .type)
             var s = c.nestedContainer(keyedBy: SourceKeys.self, forKey: .source)
             try s.encode("base64", forKey: .type)
-            try s.encode("application/pdf", forKey: .mediaType)
+            try s.encode(mediaType, forKey: .mediaType)
             try s.encode(base64, forKey: .data)
-            try c.encode(title, forKey: .title)
             if cache { try c.encode(CacheControl(), forKey: .cacheControl) }
         }
     }

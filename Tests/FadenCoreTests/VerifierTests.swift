@@ -27,6 +27,7 @@ import Testing
         #expect(json["fallbacks"] == nil)
         #expect(request.betaHeaders.isEmpty)
 
+        #expect((json["output_config"] as? [String: Any])?["effort"] as? String == "low")
         let format = try #require((json["output_config"] as? [String: Any])?["format"] as? [String: Any])
         #expect(format["type"] as? String == "json_schema")
         let schema = try #require(format["schema"] as? [String: Any])
@@ -56,8 +57,8 @@ import Testing
         let json = try body(request)
         let messages = try #require(json["messages"] as? [[String: Any]])
         let content = try #require(messages.first?["content"] as? [[String: Any]])
-        #expect(content.map { $0["type"] as? String } == ["document", "text", "text"])
-        #expect(content[0]["title"] as? String == "deck.pdf")
+        #expect(content.map { $0["type"] as? String } == ["text", "text", "text"])
+        #expect((content[0]["text"] as? String)?.hasPrefix("Slides deck.pdf (text only):\n") == true)
         // The cache is per model and the notes call uses another one, so a cache write here is never read.
         #expect(content.allSatisfy { $0["cache_control"] == nil })
         #expect(content[1]["text"] as? String == transcript.markdown())
@@ -75,6 +76,28 @@ import Testing
                      "unsupported", "quote"] {
             #expect(prompt.contains(form), "missing \(form)")
         }
+    }
+
+    @Test func citedSlidesReadsEveryLabelFormWithNeighbours() {
+        let notes = """
+            > Labels: 📄 slides · 🗣 lecture · 💡 model addition
+            - Point 📄 Folie 12
+            - Range 📄 Slide 4–5
+            | Row | 📄 Folie 30 |
+            - Summary 📄 Folie 3–30
+            - List 📄 Folie 7, 9 🗣 [00:01:02]
+            - Named 📄 a.pdf, Folie 2
+            - Digit in the name 📄 b 2.pdf, Folie 20
+            """
+        let cited = Verifier.citedSlides(in: notes, decks: ["a.pdf", "b 2.pdf"])
+        // Unnamed labels count for both decks: 11–13, 3–6, 29–31, the ends of 3–30 (2–4, 29–31), 6–10.
+        let common = Set(2...13).union(29...31)
+        #expect(cited["a.pdf"] == common.union([1]))
+        #expect(cited["b 2.pdf"] == common.union(19...21))
+    }
+
+    @Test func notesWithoutSlideLabelsCiteNothing() {
+        #expect(Verifier.citedSlides(in: "- Said 🗣 [00:01:02] at 10 past\n- Mine ✍️", decks: ["a.pdf"]).isEmpty)
     }
 
     // MARK: - Parse
