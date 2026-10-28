@@ -38,7 +38,7 @@ public actor Pipeline {
     /// The state of the run in progress, or of the last one.
     private var current: PipelineState?
 
-    private static let log = Logger(subsystem: "de.haick.faden", category: "Pipeline")
+    private static let log = Logger(subsystem: FadenCore.identifier, category: "Pipeline")
 
     static let draftName = "draft-notes.md"
     /// The error of a run the user cancelled.

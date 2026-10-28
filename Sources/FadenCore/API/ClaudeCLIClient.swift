@@ -31,7 +31,7 @@ public struct ClaudeCLIClient: MessageSending {
     /// Runs the executable with these arguments, extra environment variables and stdin.
     public typealias Runner = @Sendable (URL, [String], [String: String], Data) async throws -> Output
 
-    private static let log = Logger(subsystem: "de.haick.faden", category: "ClaudeCLIClient")
+    private static let log = Logger(subsystem: FadenCore.identifier, category: "ClaudeCLIClient")
 
     private let executable: URL?
     private let run: Runner

@@ -56,5 +56,5 @@ public enum AudioFinalizer {
         return skipped
     }
 
-    private static let log = Logger(subsystem: "de.haick.faden", category: "AudioFinalizer")
+    private static let log = Logger(subsystem: FadenCore.identifier, category: "AudioFinalizer")
 }

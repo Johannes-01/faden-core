@@ -216,7 +216,7 @@ public struct ReadyLecture: Equatable, Sendable {
         try encoder.encode(state).write(to: folder.stateURL, options: .atomic)
     }
 
-    private static let log = Logger(subsystem: "de.haick.faden", category: "ReadyLecture")
+    private static let log = Logger(subsystem: FadenCore.identifier, category: "ReadyLecture")
 }
 
 /// Which review actions a ready lecture allows right now. Opening the card (which can rename the folder),

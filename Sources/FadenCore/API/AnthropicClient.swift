@@ -85,7 +85,7 @@ public struct AnthropicClient: Sendable {
     static let maxAttempts = 3
     static let maxRetryAfter: Double = 60
     static let backoff: [Duration] = [.seconds(2), .seconds(8), .seconds(20)]
-    private static let log = Logger(subsystem: "de.haick.faden", category: "AnthropicClient")
+    private static let log = Logger(subsystem: FadenCore.identifier, category: "AnthropicClient")
 
     private let apiKey: String
     private let session: URLSession

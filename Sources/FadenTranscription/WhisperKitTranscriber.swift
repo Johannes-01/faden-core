@@ -27,7 +27,7 @@ public actor WhisperKitTranscriber: Transcriber {
     /// never run on the shared WhisperKit instance at once.
     private var current: Task<Transcript, any Error>?
 
-    private static let log = Logger(subsystem: "de.haick.faden", category: "Transcription")
+    private static let log = Logger(subsystem: FadenCore.identifier, category: "Transcription")
 
     public init(model: TranscriptionModel) {
         let variant = model.whisperKitVariant
