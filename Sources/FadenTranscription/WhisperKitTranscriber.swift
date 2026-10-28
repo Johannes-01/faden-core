@@ -70,7 +70,7 @@ public actor WhisperKitTranscriber: Transcriber {
             detectLanguage: language == nil && detected == nil,
             skipSpecialTokens: true,
             withoutTimestamps: false,
-            clipTimestamps: speech.flatMap { [Float($0.start), Float($0.end)] },
+            clipTimestamps: SpeechRegions.clipTimestamps(speech, sampleCount: samples.count, sampleRate: WhisperKit.sampleRate),
             // WhisperKit ends a window whose first token is unlikely, at every fallback temperature,
             // and returns it empty. Quiet or distant speakers trip it, which lost 20–45 s stretches.
             firstTokenLogProbThreshold: nil,

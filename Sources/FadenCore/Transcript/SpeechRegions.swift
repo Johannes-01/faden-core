@@ -41,6 +41,21 @@ public enum SpeechRegions {
         public static let fallbackMinDuration = 5.0
     }
 
+    /// `clips` as WhisperKit `clipTimestamps` (start, end, start, end, …). WhisperKit turns each
+    /// back into a sample index with `Int(round(t * sampleRate))` and never checks it against the
+    /// array, and in a long file a `Float` rounds the end of the last clip up past the last sample,
+    /// so each timestamp is stepped down until it lands inside the file.
+    public static func clipTimestamps(_ clips: [SpeechClip], sampleCount: Int, sampleRate: Int) -> [Float] {
+        let rate = Float(sampleRate)
+        return clips.flatMap { [$0.start, $0.end] }.map { seconds in
+            var stamp = Float(seconds)
+            while stamp > 0 && Int((stamp * rate).rounded()) > sampleCount {
+                stamp = stamp.nextDown
+            }
+            return stamp
+        }
+    }
+
     /// The RMS level above which a frame counts as speech.
     public static func threshold(in samples: [Float], sampleRate: Int) -> Float {
         threshold(energies: frameEnergies(samples, sampleRate: sampleRate))
