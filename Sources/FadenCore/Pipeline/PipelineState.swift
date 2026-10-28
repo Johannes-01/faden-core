@@ -25,18 +25,36 @@ public struct PaidCall: Codable, Equatable, Sendable {
     public var usage: Usage
     /// Set when the call ran on the Claude subscription: the limits' use right after it.
     public var subscription: SubscriptionLimits?
+    /// The limits' use right before the call; nil when it couldn't be read, and in states saved before Faden
+    /// recorded it.
+    public var subscriptionBefore: SubscriptionLimits?
 
-    public init(model: String, usage: Usage, subscription: SubscriptionLimits? = nil) {
+    public init(model: String, usage: Usage, subscription: SubscriptionLimits? = nil,
+                subscriptionBefore: SubscriptionLimits? = nil) {
         self.model = model
         self.usage = usage
         self.subscription = subscription
+        self.subscriptionBefore = subscriptionBefore
     }
 
     /// The call's price in USD, or nil when the model has no known price. Subscription calls cost nothing.
-    public var usd: Double? { subscription != nil ? 0 : apiUSD }
+    public var usd: Double? { subscription != nil ? 0 : Pricing.usd(model: model, usage: usage) }
 
-    /// What the call costs at API prices, also for a subscription call. nil when the model has no known price.
-    public var apiUSD: Double? { Pricing.usd(model: model, usage: usage) }
+    /// What the call used of the subscription's limits; nil without both readings.
+    public var limitUse: LimitUse? {
+        guard let subscriptionBefore, let subscription else { return nil }
+        return LimitUse(before: subscriptionBefore, after: subscription)
+    }
+}
+
+extension LimitUse {
+    /// The limits a run's calls used together; nil when none ran on the subscription or one of those lacks a reading.
+    public static func total(of calls: [PaidCall]) -> LimitUse? {
+        let subscribed = calls.filter { $0.subscription != nil }
+        let uses = subscribed.compactMap(\.limitUse)
+        guard !uses.isEmpty, uses.count == subscribed.count else { return nil }
+        return uses.dropFirst().reduce(uses[0], +)
+    }
 }
 
 /// The pipeline's progress for one lecture, persisted as `.faden/state.json` before each stage.

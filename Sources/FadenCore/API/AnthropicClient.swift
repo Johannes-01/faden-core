@@ -37,15 +37,60 @@ public struct SubscriptionLimits: Codable, Equatable, Sendable {
     public var session: Double
     /// The seven-day window.
     public var week: Double
+    /// When each window ends; a different time in a later reading means the window started over in between.
+    /// nil when the CLI didn't report it, and in states saved before Faden recorded it.
+    public var sessionResetsAt: Date?
+    public var weekResetsAt: Date?
 
-    public init(session: Double, week: Double) {
+    public init(session: Double, week: Double, sessionResetsAt: Date? = nil, weekResetsAt: Date? = nil) {
         self.session = session
         self.week = week
+        self.sessionResetsAt = sessionResetsAt
+        self.weekResetsAt = weekResetsAt
     }
 
     /// "session 12% · week 61%".
     public var text: String {
         String(format: "session %.0f%% · week %.0f%%", session * 100, week * 100)
+    }
+}
+
+/// How much of the subscription's limits a call or run used, as fractions of each window. A window is nil
+/// when it started over in between, so the two readings can't tell its use.
+public struct LimitUse: Codable, Equatable, Sendable {
+    public var session: Double?
+    public var week: Double?
+
+    public init(session: Double?, week: Double?) {
+        self.session = session
+        self.week = week
+    }
+
+    /// The change from `before` to `after`. A window counts as started over when its end moved or its use went down.
+    public init(before: SubscriptionLimits, after: SubscriptionLimits) {
+        func delta(_ before: Double, _ after: Double, _ endBefore: Date?, _ endAfter: Date?) -> Double? {
+            if let endBefore, let endAfter, abs(endAfter.timeIntervalSince(endBefore)) > 60 { return nil }
+            return after >= before ? after - before : nil
+        }
+        session = delta(before.session, after.session, before.sessionResetsAt, after.sessionResetsAt)
+        week = delta(before.week, after.week, before.weekResetsAt, after.weekResetsAt)
+    }
+
+    /// Adds per window; a window that started over in either stays unknown.
+    public static func + (a: LimitUse, b: LimitUse) -> LimitUse {
+        LimitUse(session: a.session.flatMap { x in b.session.map { x + $0 } },
+                 week: a.week.flatMap { x in b.week.map { x + $0 } })
+    }
+
+    /// "session +4% · week <1%", or "session reset during run · week +1%". The CLI reports whole percents,
+    /// so less than half a percent shows as "<1%" rather than "+0%".
+    public var text: String {
+        func part(_ name: String, _ use: Double?) -> String {
+            guard let use else { return "\(name) reset during run" }
+            let percent = (use * 100).rounded()
+            return percent < 1 ? "\(name) <1%" : "\(name) +\(Int(percent))%"
+        }
+        return "\(part("session", session)) · \(part("week", week))"
     }
 }
 
@@ -56,13 +101,17 @@ public struct MessageResult: Sendable {
     public var usage: Usage
     /// Set when the call ran on the Claude subscription (`ClaudeCLIClient`): the limits' use after it.
     public var subscription: SubscriptionLimits?
+    /// The limits' use before the call, when it could be read; see `ClaudeCLIClient.send`.
+    public var subscriptionBefore: SubscriptionLimits?
 
-    public init(text: String, model: String, stopReason: String, usage: Usage, subscription: SubscriptionLimits? = nil) {
+    public init(text: String, model: String, stopReason: String, usage: Usage,
+                subscription: SubscriptionLimits? = nil, subscriptionBefore: SubscriptionLimits? = nil) {
         self.text = text
         self.model = model
         self.stopReason = stopReason
         self.usage = usage
         self.subscription = subscription
+        self.subscriptionBefore = subscriptionBefore
     }
 }
 

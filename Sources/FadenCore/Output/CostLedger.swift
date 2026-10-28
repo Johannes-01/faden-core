@@ -34,13 +34,17 @@ public struct CostRecord: Codable, Sendable {
     public var model: String
     public var usage: Usage
     public var usd: Double?
+    /// What a subscription call used of the limits; nil for API-key calls, subscription calls without both
+    /// readings, and lines written before Faden recorded it.
+    public var limitUse: LimitUse?
 
-    public init(date: Date, lecture: String, model: String, usage: Usage, usd: Double?) {
+    public init(date: Date, lecture: String, model: String, usage: Usage, usd: Double?, limitUse: LimitUse? = nil) {
         self.date = date
         self.lecture = lecture
         self.model = model
         self.usage = usage
         self.usd = usd
+        self.limitUse = limitUse
     }
 }
 
@@ -80,10 +84,12 @@ public struct CostLedger: Sendable {
         try records(since: since).reduce(0) { $0 + ($1.usd ?? 0) }
     }
 
-    /// Like `total`, but every record priced at API prices from its tokens, so subscription runs (billed at $0)
-    /// count with what they would have cost with an API key. Records of unpriced models count as 0.
-    public func apiTotal(since: Date?) throws -> Double {
-        try records(since: since).reduce(0) { $0 + (Pricing.usd(model: $1.model, usage: $1.usage) ?? 0) }
+    /// Sums the limit use of records dated at or after `since` (all when nil), or nil when none has one. A window
+    /// that started over during a call counts as 0.
+    public func limitUse(since: Date?) throws -> LimitUse? {
+        let uses = try records(since: since).compactMap(\.limitUse)
+        guard !uses.isEmpty else { return nil }
+        return LimitUse(session: uses.reduce(0) { $0 + ($1.session ?? 0) }, week: uses.reduce(0) { $0 + ($1.week ?? 0) })
     }
 
     private func records(since: Date?) throws -> [CostRecord] {
