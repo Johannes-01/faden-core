@@ -93,4 +93,17 @@ struct SpeechRegionsTests {
         #expect((clips.first?.duration ?? 0) >= SpeechRegions.Tuning.minClip - 1e-9, "clips: \(clips)")
         #expect(isClose(clips.first?.end ?? -1, SpeechRegions.Tuning.minClip, within: 1e-9))
     }
+
+    /// A 4811.77 s lecture whose speech runs to the last sample: `Float(4811.7724375)` rounds up,
+    /// and WhisperKit read one sample past the array and crashed.
+    @Test func clipTimestampsStayInsideTheFile() {
+        let count = 76_988_359
+        let end = Double(count) / Double(rate)
+        let stamps = SpeechRegions.clipTimestamps([SpeechClip(start: 3000, end: end)], sampleCount: count, sampleRate: rate)
+        #expect(stamps.count == 2)
+        for stamp in stamps {
+            #expect(Int((stamp * Float(rate)).rounded()) <= count, "stamp \(stamp)")
+        }
+        #expect(isClose(Double(stamps[1]), end, within: 0.001))
+    }
 }

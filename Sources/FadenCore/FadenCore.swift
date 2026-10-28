@@ -1,6 +1,10 @@
 import Foundation
 
 public enum FadenCore {
+    /// The app's reverse-DNS identifier: the log subsystem and the Keychain service. Keep it equal to
+    /// `CFBundleIdentifier` in `Resources/Info.plist`.
+    public static let identifier = "io.github.johannes-01.faden"
+
     static let resourceBundleName = "Faden_FadenCore.bundle"
 
     /// The bundle holding the prompts and styles. Use this instead of `Bundle.module`.

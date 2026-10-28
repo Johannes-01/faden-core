@@ -33,7 +33,7 @@ public enum APIKeyStatus: Equatable, Sendable {
 
 /// The Anthropic API key, stored as a generic password item in the login Keychain.
 public enum Keychain {
-    static let service = "de.haick.faden"
+    static let service = FadenCore.identifier
     static let defaultAccount = "anthropic-api-key"
 
     /// The stored key, or nil for "not found" and for any Keychain error. Use `readResult()` to tell them apart.

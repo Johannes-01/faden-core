@@ -203,5 +203,5 @@ public enum StopFlow {
         (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
     }
 
-    private static let log = Logger(subsystem: "de.haick.faden", category: "StopFlow")
+    private static let log = Logger(subsystem: FadenCore.identifier, category: "StopFlow")
 }
