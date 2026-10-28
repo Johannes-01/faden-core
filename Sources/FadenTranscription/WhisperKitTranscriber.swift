@@ -1,5 +1,6 @@
 import FadenCore
 import Foundation
+import os
 import WhisperKit
 
 public enum TranscriptionModel: String, CaseIterable, Codable, Sendable {
@@ -26,11 +27,22 @@ public actor WhisperKitTranscriber: Transcriber {
     /// never run on the shared WhisperKit instance at once.
     private var current: Task<Transcript, any Error>?
 
+    private static let log = Logger(subsystem: "de.haick.faden", category: "Transcription")
+
     public init(model: TranscriptionModel) {
         let variant = model.whisperKitVariant
         modelName = variant
         loading = SharedLoad {
-            PipeBox(pipe: try await WhisperKit(WhisperKitConfig(model: variant, verbose: false, load: true, download: true)))
+            let started = Date()
+            Self.log.info("Loading speech model \(variant, privacy: .public)")
+            do {
+                let pipe = try await WhisperKit(WhisperKitConfig(model: variant, verbose: false, load: true, download: true))
+                Self.log.info("Speech model \(variant, privacy: .public) loaded in \(-started.timeIntervalSinceNow, format: .fixed(precision: 1)) s")
+                return PipeBox(pipe: pipe)
+            } catch {
+                Self.log.error("Loading speech model \(variant, privacy: .public) failed: \(error, privacy: .public)")
+                throw error
+            }
         }
     }
 
@@ -55,14 +67,22 @@ public actor WhisperKitTranscriber: Transcriber {
         let samples = try AudioProcessor.loadAudioAsFloatArray(fromPath: audio.path)
         let speech = SpeechRegions.clips(in: samples, sampleRate: WhisperKit.sampleRate)
         let duration = Double(samples.count) / Double(WhisperKit.sampleRate)
+        let speechSeconds = speech.reduce(0) { $0 + $1.duration }
+        // Logged at notice so it is kept on disk: it is what a crash inside WhisperKit needs explaining.
+        Self.log.notice("\(audio.lastPathComponent, privacy: .public): \(samples.count) samples (\(duration, format: .fixed(precision: 1)) s), \(speech.count) speech clips covering \(speechSeconds, format: .fixed(precision: 1)) s, last ending at \(speech.last?.end ?? 0, format: .fixed(precision: 3)) s")
         if speech.isEmpty && duration <= SpeechRegions.Tuning.fallbackMinDuration {
+            Self.log.info("No speech in a short file, nothing to transcribe")
             return Transcript(segments: [], markers: [], language: language, model: modelName)
+        }
+        if speech.isEmpty {
+            Self.log.notice("No speech found in \(duration, format: .fixed(precision: 1)) s, transcribing the whole file")
         }
         // No speech found in a longer file means the VAD is wrong about this recording (for
         // example a noise bed above quiet speech), so transcribe all of it instead of nothing.
         // Each VAD chunk would otherwise detect its own language, and a mumbled one can come out
         // as Dutch, so the language is detected once for the whole recording.
         let detected = language == nil ? try await detectLanguage(pipe, samples: samples, speech: speech) : nil
+        Self.log.info("Language \(language ?? "auto", privacy: .public), detected \(detected ?? "none", privacy: .public)")
         let options = DecodingOptions(
             task: .transcribe,
             language: language ?? detected,
@@ -77,7 +97,9 @@ public actor WhisperKitTranscriber: Transcriber {
             chunkingStrategy: .vad)
         // Only the speech clips are decoded. WhisperKit reports segment times from the start of
         // the array (seek position, plus each VAD chunk's offset), so they are file positions.
+        let started = Date()
         let results = try await pipe.transcribe(audioArray: samples, decodeOptions: options)
+        Self.log.info("WhisperKit returned \(results.count) results with \(results.reduce(0) { $0 + $1.segments.count }) segments in \(-started.timeIntervalSinceNow, format: .fixed(precision: 1)) s")
 
         let segments = results
             .flatMap(\.segments)

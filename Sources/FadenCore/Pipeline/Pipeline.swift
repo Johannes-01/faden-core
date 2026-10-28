@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import os
 
 public protocol MessageSending: Sendable {
     func send(_ r: MessageRequest) async throws -> MessageResult
@@ -36,6 +37,8 @@ public actor Pipeline {
     private var isRunning = false
     /// The state of the run in progress, or of the last one.
     private var current: PipelineState?
+
+    private static let log = Logger(subsystem: "de.haick.faden", category: "Pipeline")
 
     static let draftName = "draft-notes.md"
     /// The error of a run the user cancelled.
@@ -101,6 +104,7 @@ public actor Pipeline {
         do {
             state = try JSONDecoder().decode(PipelineState.self, from: Data(contentsOf: folder.stateURL))
         } catch {
+            Self.log.error("Reading the saved progress of \(self.folder.url.lastPathComponent, privacy: .public) failed: \(error, privacy: .public)")
             var failed = PipelineState(stage: .failed, audio: [], styleID: "", allowAdditions: true)
             failed.error = "Could not read the saved progress: \(error.localizedDescription)"
             continuation.yield(.failed)
@@ -119,6 +123,7 @@ public actor Pipeline {
     /// so the folder isn't recreated.
     private func folderGone(_ state: PipelineState?) -> PipelineState? {
         guard !FileManager.default.fileExists(atPath: folder.url.path) else { return nil }
+        Self.log.error("Lecture folder \(self.folder.url.lastPathComponent, privacy: .public) no longer exists")
         var failed = state ?? PipelineState(stage: .failed, audio: [], styleID: "", allowAdditions: true)
         failed.stage = .failed
         failed.failedStage = nil
@@ -132,30 +137,43 @@ public actor Pipeline {
         s.error = nil
         s.failedStage = nil
         if s.stage == .ready { s.stage = .transcribing }
+        let lecture = folder.url.lastPathComponent
+        Self.log.notice("Run of \(lecture, privacy: .public) starts at \(s.stage.rawValue, privacy: .public) with \(s.audio.count) audio files and \(s.slides.count) slide files")
         // Checked before anything is paid for: a deleted input file is never silently dropped.
         if let deleted = s.deletedInputMessage(
             startingAt: s.stage, transcriptReusable: s.stage == .transcribing && reusableTranscript(for: s) != nil,
             exists: { FileManager.default.fileExists(atPath: $0.path) }) {
+            Self.log.error("Run of \(lecture, privacy: .public) stopped before \(s.stage.rawValue, privacy: .public): \(deleted, privacy: .public)")
             s.failedStage = s.stage
             s.stage = .failed
             s.error = deleted
         }
         while s.stage != .done && s.stage != .failed {
             let stage = s.stage
+            let started = Date()
             do {
                 try checkpoint(s)
                 try Task.checkCancellation()
                 continuation.yield(stage)
                 s = try await perform(stage, s)
+                Self.log.notice("\(stage.rawValue, privacy: .public) finished in \(-started.timeIntervalSinceNow, format: .fixed(precision: 1)) s")
             } catch {
                 s.stage = .failed
                 s.failedStage = stage
                 // A cancelled request can surface as another error, e.g. a cut-off stream.
                 s.error = Task.isCancelled ? Self.cancelledMessage : Self.message(for: error)
+                if Task.isCancelled {
+                    Self.log.notice("\(stage.rawValue, privacy: .public) cancelled after \(-started.timeIntervalSinceNow, format: .fixed(precision: 1)) s")
+                } else {
+                    Self.log.error("\(stage.rawValue, privacy: .public) failed after \(-started.timeIntervalSinceNow, format: .fixed(precision: 1)) s: \(error, privacy: .public)")
+                }
             }
         }
         // Best effort: the outcome is already on disk (notes) or in `s.error`.
-        try? checkpoint(s)
+        do { try checkpoint(s) } catch {
+            Self.log.error("Saving the final state of \(lecture, privacy: .public) failed: \(error, privacy: .public)")
+        }
+        Self.log.notice("Run of \(lecture, privacy: .public) ended \(s.stage.rawValue, privacy: .public)")
         continuation.yield(s.stage)
         return s
     }
@@ -184,10 +202,12 @@ public actor Pipeline {
 
         var transcript: Transcript
         if let reused = reusableTranscript(for: s) {
+            Self.log.info("Reusing the stored \(reused.model, privacy: .public) transcript")
             transcript = reused
         } else {
             var parts: [(file: String, transcript: Transcript, duration: TimeInterval)] = []
             for url in s.audio {
+                Self.log.info("Transcribing \(url.lastPathComponent, privacy: .public) with \(self.transcriber.modelName, privacy: .public)")
                 let part = try await transcriber.transcribe(audio: url, language: s.language)
                 parts.append((url.lastPathComponent, part, try await duration(url)))
                 // A transcriber may return what it has so far when cancelled; never keep that as the transcript.
@@ -239,6 +259,7 @@ public actor Pipeline {
             transcript: try loadTranscript(), slides: s.slides, userNotes: s.userNotes, style: style,
             allowAdditions: s.allowAdditions, languageOverride: s.language))
         let result = try await client.send(request)
+        Self.logCall("Notes", result)
 
         try createFadenDirectory()
         try Data(result.text.utf8).write(to: draftURL(Self.draftName), options: .atomic)
@@ -267,16 +288,20 @@ public actor Pipeline {
         } catch {
             // Cancelling stops the run here; only real failures of the check are skipped.
             if error is CancellationError || Task.isCancelled { throw CancellationError() }
+            Self.log.error("Check skipped: \(error, privacy: .public)")
             s.verificationSkipped = "skipped (\(Self.skipReason(error)))"
             s.stage = .saving
             return s
         }
+        Self.logCall("Check", result)
         let call = PaidCall(model: result.model, usage: result.usage, subscription: result.subscription)
         s.verifyCall = call
         record(call)
         do {
             s.findings = try Verifier.parse(result.text)
+            Self.log.info("Check flagged \(s.findings?.count ?? 0) findings")
         } catch {
+            Self.log.error("Check result unreadable, skipped: \(error, privacy: .public)")
             s.verificationSkipped = "skipped (\(Self.skipReason(error)))"
         }
         s.stage = .saving
@@ -301,14 +326,19 @@ public actor Pipeline {
 
         let target = folder.newNotesURL(now: now())
         try Data(header.insert(into: merged.notes).utf8).write(to: target, options: .withoutOverwriting)
+        Self.log.info("Saved \(target.lastPathComponent, privacy: .public)")
 
         if s.titleIsPlaceholder, s.slides.isEmpty, let title = Self.title(of: draft) {
             let old = folder
             // The notes are saved; a folder that can't be renamed keeps its placeholder name.
-            if let renamed = try? old.rename(toTitle: title, date: Self.folderDate(old) ?? now()) {
+            do {
+                let renamed = try old.rename(toTitle: title, date: Self.folderDate(old) ?? now())
                 folder = renamed
                 s = Self.relocate(s, from: old.url, to: renamed.url)
                 s.titleIsPlaceholder = false
+                Self.log.info("Renamed \(old.url.lastPathComponent, privacy: .public) to \(renamed.url.lastPathComponent, privacy: .public)")
+            } catch {
+                Self.log.error("Renaming \(old.url.lastPathComponent, privacy: .public) to the notes title failed: \(error, privacy: .public)")
             }
         }
         s.stage = .done
@@ -353,9 +383,18 @@ public actor Pipeline {
 
     /// Cost tracking is best effort: a ledger that can't be written must not fail (and re-bill) a paid stage.
     private func record(_ call: PaidCall) {
-        try? ledger.append(CostRecord(
-            date: now(), lecture: folder.url.lastPathComponent, model: call.model, usage: call.usage,
-            usd: call.usd))
+        do {
+            try ledger.append(CostRecord(
+                date: now(), lecture: folder.url.lastPathComponent, model: call.model, usage: call.usage,
+                usd: call.usd))
+        } catch {
+            Self.log.error("Writing the cost ledger failed: \(error, privacy: .public)")
+        }
+    }
+
+    private static func logCall(_ name: String, _ result: MessageResult) {
+        let u = result.usage
+        log.info("\(name, privacy: .public) call answered by \(result.model, privacy: .public), stop \(result.stopReason, privacy: .public), tokens in \(u.inputTokens) out \(u.outputTokens) cache write \(u.cacheCreationInputTokens) read \(u.cacheReadInputTokens)")
     }
 
     /// `C` for the bundled `C · Red line first, then detail`; a custom style's full name otherwise.

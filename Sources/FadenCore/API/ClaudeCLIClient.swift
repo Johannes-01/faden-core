@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 public enum ClaudeCLIError: Error, Equatable, Sendable {
     /// No `claude` executable was found in the usual install locations.
@@ -30,6 +31,8 @@ public struct ClaudeCLIClient: MessageSending {
     /// Runs the executable with these arguments, extra environment variables and stdin.
     public typealias Runner = @Sendable (URL, [String], [String: String], Data) async throws -> Output
 
+    private static let log = Logger(subsystem: "de.haick.faden", category: "ClaudeCLIClient")
+
     private let executable: URL?
     private let run: Runner
 
@@ -42,6 +45,10 @@ public struct ClaudeCLIClient: MessageSending {
         guard let executable else { throw ClaudeCLIError.notFound }
         let output = try await run(executable, try Self.arguments(for: r), Self.environment(for: r), try Self.input(for: r))
         try Task.checkCancellation()
+        if output.status != 0 {
+            let stderr = String(decoding: output.stderr, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+            Self.log.error("\(executable.path, privacy: .public) exited with status \(output.status): \(stderr, privacy: .public)")
+        }
         return try Self.parse(output, requestedModel: r.model)
     }
 

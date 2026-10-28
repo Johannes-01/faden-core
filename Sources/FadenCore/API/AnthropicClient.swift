@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 public struct Usage: Codable, Equatable, Sendable {
     public var inputTokens: Int
@@ -84,6 +85,7 @@ public struct AnthropicClient: Sendable {
     static let maxAttempts = 3
     static let maxRetryAfter: Double = 60
     static let backoff: [Duration] = [.seconds(2), .seconds(8), .seconds(20)]
+    private static let log = Logger(subsystem: "de.haick.faden", category: "AnthropicClient")
 
     private let apiKey: String
     private let session: URLSession
@@ -143,6 +145,20 @@ public struct AnthropicClient: Sendable {
         return Self.backoff[min(attempt, Self.backoff.count - 1)]
     }
 
+    /// Waits before the next attempt after `attempt` failed with a retryable HTTP status.
+    private func retry(after attempt: Int, response: HTTPURLResponse) async throws {
+        let wait = delay(forFailedAttempt: attempt - 1, response: response)
+        Self.log.notice("Attempt \(attempt) got HTTP \(response.statusCode), retrying in \(wait, privacy: .public)")
+        try await sleep(wait)
+    }
+
+    /// Waits before the next attempt after `attempt` couldn't reach the API.
+    private func retry(after attempt: Int, URLError error: URLError) async throws {
+        let wait = delay(forFailedAttempt: attempt - 1, response: nil)
+        Self.log.notice("Attempt \(attempt) could not reach the API (\(error.code.rawValue)), retrying in \(wait, privacy: .public)")
+        try await sleep(wait)
+    }
+
     private static func httpError(status: Int, body: Data) -> AnthropicError {
         struct Body: Decodable {
             struct Inner: Decodable { var type: String?; var message: String? }
@@ -168,18 +184,20 @@ public struct AnthropicClient: Sendable {
             } catch let error as URLError {
                 if error.code == .cancelled || Task.isCancelled { throw CancellationError() }
                 if Self.neverReachedServer(error), attempt < Self.maxAttempts {
-                    try await sleep(delay(forFailedAttempt: attempt - 1, response: nil))
+                    try await retry(after: attempt, URLError: error)
                     continue
                 }
+                Self.log.error("Request failed on attempt \(attempt): \(error, privacy: .public)")
                 throw AnthropicError.network(error.localizedDescription)
             }
             if (200..<300).contains(http.statusCode) {
                 return try Self.parseNonStreaming(data)
             }
             if Self.isRetryable(status: http.statusCode), attempt < Self.maxAttempts {
-                try await sleep(delay(forFailedAttempt: attempt - 1, response: http))
+                try await retry(after: attempt, response: http)
                 continue
             }
+            Self.log.error("Request failed with HTTP \(http.statusCode) on attempt \(attempt)")
             throw Self.httpError(status: http.statusCode, body: data)
         }
     }
@@ -229,9 +247,10 @@ public struct AnthropicClient: Sendable {
             } catch let error as URLError {
                 if error.code == .cancelled || Task.isCancelled { throw CancellationError() }
                 if Self.neverReachedServer(error), attempt < Self.maxAttempts {
-                    try await sleep(delay(forFailedAttempt: attempt - 1, response: nil))
+                    try await retry(after: attempt, URLError: error)
                     continue
                 }
+                Self.log.error("Request failed on attempt \(attempt): \(error, privacy: .public)")
                 throw AnthropicError.network(error.localizedDescription)
             }
 
@@ -239,9 +258,10 @@ public struct AnthropicClient: Sendable {
                 var body = Data()
                 do { for try await byte in bytes { body.append(byte) } } catch { /* keep what we have */ }
                 if Self.isRetryable(status: http.statusCode), attempt < Self.maxAttempts {
-                    try await sleep(delay(forFailedAttempt: attempt - 1, response: http))
+                    try await retry(after: attempt, response: http)
                     continue
                 }
+                Self.log.error("Request failed with HTTP \(http.statusCode) on attempt \(attempt)")
                 throw Self.httpError(status: http.statusCode, body: body)
             }
 
