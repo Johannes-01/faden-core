@@ -62,34 +62,140 @@ import Testing
         #expect(result.subscription == SubscriptionLimits(session: 0.08, week: 0.61))
     }
 
-    @Test func subscriptionCallsCostNothingAndSummarizeTokensAndLimits() {
-        let usage = Usage(inputTokens: 1000, outputTokens: 500, cacheCreationInputTokens: 0, cacheReadInputTokens: 0)
-        let limits = SubscriptionLimits(session: 0.124, week: 0.61)
-        #expect(PaidCall(model: "claude-opus-5-5", usage: usage, subscription: limits).usd == 0)
-        #expect(PaidCall(model: "claude-opus-5-5", usage: usage).usd! > 0)
-        #expect(PaidCall(model: "claude-opus-5-5", usage: usage, subscription: limits).apiUSD
-            == PaidCall(model: "claude-opus-5-5", usage: usage).usd)
+    /// Recorded from `claude -p` 2.x with Faden's arguments (the `system` init line left out): the only
+    /// `rate_limit_event` comes after the assistant message.
+    @Test func parsesRecordedCLIOutput() throws {
+        let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        let stdout = try Data(contentsOf: dir.appending(path: "Fixtures/cli-haiku-ok.jsonl"))
+        let types = stdout.split(separator: 0x0A).compactMap {
+            (try? JSONSerialization.jsonObject(with: Data($0)) as? [String: Any])?["type"] as? String
+        }
+        #expect(types.filter { $0 == "rate_limit_event" }.count == 1)
+        #expect(types.firstIndex(of: "assistant")! < types.firstIndex(of: "rate_limit_event")!)
 
-        // Opus: 1000 × $4 + 500 × $20 = $0.014; Haiku: 1000 × $0.10 + 500 × $0.50 = $0.00035.
+        let result = try ClaudeCLIClient.parse(.init(status: 0, stdout: stdout, stderr: Data()), requestedModel: "x")
+        #expect(result.text == "ok")
+        #expect(result.model == "claude-haiku-5-5")
+        #expect(result.subscription == SubscriptionLimits(
+            session: 0.48, week: 0.18,
+            sessionResetsAt: Date(timeIntervalSince1970: 1793189400), weekResetsAt: Date(timeIntervalSince1970: 1793548800)))
+    }
+
+    private static func limitEvent(session: Double, week: Double, sessionEnd: Double = 1793189400) -> String {
+        #"{"type":"rate_limit_event","rate_limit_info":{"unifiedWindows":{"five_hour":{"utilization":\#(session),"resetsAt":\#(sessionEnd)},"seven_day":{"utilization":\#(week),"resetsAt":1793548800}}}}"#
+    }
+
+    private static let success = #"{"type":"result","subtype":"success","is_error":false,"stop_reason":"end_turn","result":"done"}"#
+
+    /// A fake CLI that answers each call with the next output and records which model each call asked for.
+    private final class Script: @unchecked Sendable {
+        private let lock = NSLock()
+        private var outputs: [Data]
+        private(set) var models: [String] = []
+
+        init(_ outputs: [Data]) { self.outputs = outputs }
+
+        var runner: ClaudeCLIClient.Runner {
+            { _, args, _, _ in
+                self.lock.withLock {
+                    self.models.append(args[args.firstIndex(of: "--model")! + 1])
+                    return ClaudeCLIClient.Output(status: 0, stdout: self.outputs.removeFirst(), stderr: Data())
+                }
+            }
+        }
+    }
+
+    @Test func firstCallProbesTheLimitsAndLaterCallsStartFromThePreviousReading() async throws {
+        let script = Script([
+            Self.lines([Self.assistant, Self.limitEvent(session: 0.10, week: 0.60), Self.success]),  // probe
+            Self.lines([Self.assistant, Self.limitEvent(session: 0.14, week: 0.61), Self.success]),  // notes
+            Self.lines([Self.assistant, Self.limitEvent(session: 0.15, week: 0.61), Self.success]),  // check
+        ])
+        let client = ClaudeCLIClient(executable: URL(fileURLWithPath: "/bin/claude"), run: script.runner)
+        let notes = try await client.send(Self.notesRequest())
+        let check = try await client.send(Self.notesRequest())
+        #expect(script.models == [ClaudeCLIClient.probeModel, "claude-opus-5-5", "claude-opus-5-5"])
+        #expect(notes.subscriptionBefore?.session == 0.10)
+        #expect(notes.subscription?.session == 0.14)
+        #expect(check.subscriptionBefore?.session == 0.14)
+        #expect(check.subscription?.session == 0.15)
+    }
+
+    @Test func failedProbeLeavesTheBeforeReadingOut() async throws {
+        let script = Script([
+            Self.lines([#"{"type":"result","subtype":"error_during_execution","is_error":true}"#]),
+            Self.lines([Self.assistant, Self.limitEvent(session: 0.14, week: 0.61), Self.success]),
+        ])
+        let result = try await ClaudeCLIClient(executable: URL(fileURLWithPath: "/bin/claude"), run: script.runner)
+            .send(Self.notesRequest())
+        #expect(result.subscriptionBefore == nil)
+        #expect(result.subscription?.session == 0.14)
+        #expect(PaidCall(model: result.model, usage: result.usage, subscription: result.subscription,
+                         subscriptionBefore: result.subscriptionBefore).limitUse == nil)
+    }
+
+    @Test func subscriptionCallsCostNothing() {
+        let usage = Usage(inputTokens: 1000, outputTokens: 500)
+        #expect(PaidCall(model: "claude-opus-5-5", usage: usage, subscription: SubscriptionLimits(session: 0.1, week: 0.6)).usd == 0)
+        #expect(PaidCall(model: "claude-opus-5-5", usage: usage).usd! > 0)
+    }
+
+    private static func call(_ model: String, from before: (Double, Double)?, to after: (Double, Double),
+                             sessionEnds: (Double, Double) = (1793189400, 1793189400)) -> PaidCall {
+        PaidCall(model: model, usage: Usage(inputTokens: 1000, outputTokens: 500),
+                 subscription: SubscriptionLimits(session: after.0, week: after.1,
+                                                  sessionResetsAt: Date(timeIntervalSince1970: sessionEnds.1)),
+                 subscriptionBefore: before.map { SubscriptionLimits(session: $0.0, week: $0.1,
+                                                                     sessionResetsAt: Date(timeIntervalSince1970: sessionEnds.0)) })
+    }
+
+    @Test func runShowsTheLimitUseSummedOverItsCalls() {
         var state = PipelineState(audio: [], slides: [], userNotes: nil, styleID: "C", allowAdditions: true, language: nil)
-        state.notesCall = PaidCall(model: "claude-opus-5-5", usage: usage, subscription: SubscriptionLimits(session: 0.1, week: 0.6))
-        state.verifyCall = PaidCall(model: "claude-haiku-5-5", usage: usage, subscription: limits)
+        state.notesCall = Self.call("claude-opus-5-5", from: (0.10, 0.60), to: (0.13, 0.60))
+        state.verifyCall = Self.call("claude-haiku-5-5", from: (0.13, 0.60), to: (0.14, 0.61))
         #expect(state.costUSD == 0)
-        #expect(RunCost.summary(state) == "\(3000.formatted()) tokens · ≈ $0.01 at API prices · session 12% · week 61%")
+        #expect(state.limitUse?.text == "session +4% · week +1%")
+        #expect(RunCost.summary(state) == "\(3000.formatted()) tokens · session +4% · week +1%")
 
         let header = NotesHeader(date: .now, style: "C", slides: [], audio: [], userNotes: nil,
                                  notesCall: state.notesCall!, verifyCall: state.verifyCall, verification: "ok").markdown()
-        #expect(header.contains("> Cost: Claude subscription, session 12% · week 61% used after the run · ≈ $0.01 at API prices (2000 in / 1000 out tokens)"))
+        #expect(header.contains("> Cost: Claude subscription, limit use: session +4% · week +1% (2000 in / 1000 out tokens)"))
+        #expect(!header.contains("$"))
     }
 
-    @Test func subscriptionRunWithUnpricedModelOmitsAPIPrice() {
-        let limits = SubscriptionLimits(session: 0.1, week: 0.6)
+    @Test func useBelowOnePercentIsNotShownAsZero() {
+        #expect(LimitUse(session: 0, week: 0.004).text == "session <1% · week <1%")
+        #expect(LimitUse(session: 0.006, week: 0.0149).text == "session +1% · week +1%")
+        // 0.49 − 0.48 is a hair under 0.01 in floating point.
+        #expect(LimitUse(before: SubscriptionLimits(session: 0.48, week: 0.1), after: SubscriptionLimits(session: 0.49, week: 0.1)).text
+            == "session +1% · week <1%")
+    }
+
+    @Test func windowThatStartsOverDuringTheRunIsShownAsReset() {
+        // The session's end moved: a new five-hour window started between the readings.
+        let moved = Self.call("claude-opus-5-5", from: (0.10, 0.60), to: (0.12, 0.61), sessionEnds: (1793189400, 1793207400))
+        #expect(moved.limitUse?.session == nil)
+        #expect(abs((moved.limitUse?.week ?? 0) - 0.01) < 1e-9)
+        // Use went down without a reported end.
+        let dropped = LimitUse(before: SubscriptionLimits(session: 0.9, week: 0.6), after: SubscriptionLimits(session: 0.02, week: 0.61))
+        #expect(dropped.session == nil)
+
         var state = PipelineState(audio: [], slides: [], userNotes: nil, styleID: "C", allowAdditions: true, language: nil)
-        state.notesCall = PaidCall(model: "claude-unknown", usage: Usage(inputTokens: 10, outputTokens: 5), subscription: limits)
-        #expect(RunCost.summary(state) == "\(15.formatted()) tokens · session 10% · week 60%")
+        state.notesCall = moved
+        state.verifyCall = Self.call("claude-haiku-5-5", from: (0.12, 0.61), to: (0.13, 0.61), sessionEnds: (1793207400, 1793207400))
+        #expect(state.limitUse?.text == "session reset during run · week +1%")
+    }
+
+    @Test func oldStatesWithoutABeforeReadingShowNoLimitUse() throws {
+        // A state saved before Faden recorded the before-reading and reset times.
+        let json = #"{"stage":"done","audio":[],"slides":[],"styleID":"C","allowAdditions":true,"transcriptionModel":"m","forceRetranscribe":false,"titleIsPlaceholder":false,"markers":[],"notesCall":{"model":"claude-opus-5-5","usage":{"input_tokens":1000,"output_tokens":500},"subscription":{"session":0.12,"week":0.61}}}"#
+        let state = try JSONDecoder().decode(PipelineState.self, from: Data(json.utf8))
+        #expect(state.ranOnSubscription)
+        #expect(state.limitUse == nil)
+        #expect(RunCost.summary(state) == "\(1500.formatted()) tokens")
         let header = NotesHeader(date: .now, style: "C", slides: [], audio: [], userNotes: nil,
                                  notesCall: state.notesCall!, verifyCall: nil, verification: "ok").markdown()
-        #expect(!header.contains("API prices"))
+        #expect(header.contains("> Cost: Claude subscription (1000 in / 500 out tokens)"))
     }
 
     @Test func structuredOutputBecomesTheText() throws {
@@ -136,6 +242,8 @@ import Testing
         #expect(result.model == Verifier.model)
         #expect(result.usage.outputTokens > 0)
         #expect((result.subscription?.week ?? 0) > 0, "\(String(describing: result.subscription))")
+        // Read by the probe call before it.
+        #expect(result.subscriptionBefore != nil)
     }
 
     /// Runs a fake `claude` that echoes its stdin size and an env variable back as the result.

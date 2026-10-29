@@ -265,7 +265,8 @@ public actor Pipeline {
         try Data(result.text.utf8).write(to: draftURL(Self.draftName), options: .atomic)
         s.draftNotesFile = Self.draftName
         s.styleName = Self.shortName(style)
-        let call = PaidCall(model: result.model, usage: result.usage, subscription: result.subscription)
+        let call = PaidCall(model: result.model, usage: result.usage, subscription: result.subscription,
+                            subscriptionBefore: result.subscriptionBefore)
         s.notesCall = call
         record(call)
         s.stage = .verifying
@@ -294,7 +295,8 @@ public actor Pipeline {
             return s
         }
         Self.logCall("Check", result)
-        let call = PaidCall(model: result.model, usage: result.usage, subscription: result.subscription)
+        let call = PaidCall(model: result.model, usage: result.usage, subscription: result.subscription,
+                            subscriptionBefore: result.subscriptionBefore)
         s.verifyCall = call
         record(call)
         do {
@@ -386,7 +388,7 @@ public actor Pipeline {
         do {
             try ledger.append(CostRecord(
                 date: now(), lecture: folder.url.lastPathComponent, model: call.model, usage: call.usage,
-                usd: call.usd))
+                usd: call.usd, limitUse: call.limitUse))
         } catch {
             Self.log.error("Writing the cost ledger failed: \(error, privacy: .public)")
         }

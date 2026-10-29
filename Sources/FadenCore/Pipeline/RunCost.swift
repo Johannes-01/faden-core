@@ -5,17 +5,17 @@ extension PipelineState {
     /// shows it. nil when any call's model has no known price. No calls sum to 0.
     public var costUSD: Double? { sum(\.usd) }
 
-    /// What the run costs at API prices, also when it ran on the subscription. nil as for `costUSD`.
-    public var apiCostUSD: Double? { sum(\.apiUSD) }
+    /// Whether any of the run's calls ran on the subscription.
+    public var ranOnSubscription: Bool { calls.contains { $0.subscription != nil } }
 
-    /// The limits' use after the run's last subscription call; nil when no call ran on the subscription.
-    public var subscription: SubscriptionLimits? {
-        [notesCall, verifyCall].compactMap { $0 }.last(where: { $0.subscription != nil })?.subscription
-    }
+    /// What the run used of the subscription's limits; nil as for `LimitUse.total(of:)`.
+    public var limitUse: LimitUse? { LimitUse.total(of: calls) }
+
+    private var calls: [PaidCall] { [notesCall, verifyCall].compactMap { $0 } }
 
     private func sum(_ price: KeyPath<PaidCall, Double?>) -> Double? {
         var sum = 0.0
-        for call in [notesCall, verifyCall].compactMap({ $0 }) {
+        for call in calls {
             guard let p = call[keyPath: price] else { return nil }
             sum += p
         }
@@ -29,28 +29,23 @@ public enum RunCost {
         usd.map { String(format: "$%.2f", $0) }
     }
 
-    /// "≈ $0.84 at API prices", or nil when the price is unknown.
-    public static func apiText(_ usd: Double?) -> String? {
-        text(usd).map { "≈ \($0) at API prices" }
-    }
-
-    /// The finished run for the notification: "48,210 tokens · ≈ $0.84 at API prices · session 12% · week 61%"
-    /// when it ran on the subscription, else its cost, e.g. "$0.84". nil when neither is known.
+    /// The finished run for the notification: "48,210 tokens · session +4% · week <1%" when it ran on the
+    /// subscription (just the tokens when its limit use is unknown), else its cost, e.g. "$0.84". nil when
+    /// the price is unknown.
     public static func summary(_ state: PipelineState) -> String? {
-        guard let limits = state.subscription else { return text(state.costUSD) }
+        guard state.ranOnSubscription else { return text(state.costUSD) }
         var tokens = 0
         for u in [state.notesCall, state.verifyCall].compactMap({ $0?.usage }) {
             tokens += u.inputTokens + u.cacheReadInputTokens + u.cacheCreationInputTokens
             tokens += u.outputTokens
         }
-        return (["\(tokens.formatted()) tokens"] + [apiText(state.apiCostUSD)].compactMap { $0 } + [limits.text])
-            .joined(separator: " · ")
+        return (["\(tokens.formatted()) tokens"] + [state.limitUse?.text].compactMap { $0 }).joined(separator: " · ")
     }
 
-    /// The cost text of the lecture's saved state, e.g. "$0.84", or "≈ $0.84 at API prices" for a run on the
-    /// subscription; nil if unreadable or unpriced.
+    /// The cost text of the lecture's saved state, e.g. "$0.84", or "session +4% · week <1%" for a run on the
+    /// subscription; nil if unreadable, unpriced or of unknown limit use.
     public static func text(for folder: LectureFolder) -> String? {
-        PipelineState.saved(in: folder).flatMap { $0.subscription != nil ? apiText($0.apiCostUSD) : text($0.costUSD) }
+        PipelineState.saved(in: folder).flatMap { $0.ranOnSubscription ? $0.limitUse?.text : text($0.costUSD) }
     }
 }
 
