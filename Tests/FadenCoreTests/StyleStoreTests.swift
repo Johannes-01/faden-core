@@ -30,7 +30,7 @@ import Testing
         defer { try? FileManager.default.removeItem(at: parent) }
         let dir = parent.appendingPathComponent("styles", isDirectory: true)
         try StyleStore(dir: dir).installDefaultsIfMissing()
-        #expect(try StyleStore(dir: dir).all().map(\.id) == ["A-slide-by-slide", "B-by-topic", "C-red-line"])
+        #expect(try StyleStore(dir: dir).all().map(\.id) == ["A-slide-by-slide", "B-by-topic", "C-red-line", "D-slides-and-lecture"])
     }
 
     @Test func bundledDefaultsParse() throws {
@@ -47,7 +47,8 @@ import Testing
             #expect(!style.prompt.hasPrefix("---"))
             #expect(style.name != style.id)
         }
-        #expect(styles.filter(\.requiresSlides).map(\.id) == ["A-slide-by-slide"])
+        #expect(styles.filter(\.requiresSlides).map(\.id) == ["A-slide-by-slide", "D-slides-and-lecture"])
+        #expect(styles.filter(\.slideImages).map(\.id) == ["D-slides-and-lecture"])
     }
 
     @Test func styleAFallsBackToBWithoutSlides() throws {
@@ -58,6 +59,7 @@ import Testing
         #expect(try store.resolve(id: "A-slide-by-slide", hasSlides: false).id == "B-by-topic")
         #expect(try store.resolve(id: "A-slide-by-slide", hasSlides: true).id == "A-slide-by-slide")
         #expect(try store.resolve(id: "C-red-line", hasSlides: false).id == "C-red-line")
+        #expect(try store.resolve(id: "D-slides-and-lecture", hasSlides: false).id == "B-by-topic")
     }
 
     @Test func userStyleAppears() throws {
@@ -65,13 +67,13 @@ import Testing
         defer { try? FileManager.default.removeItem(at: dir) }
         let store = StyleStore(dir: dir)
         try store.installDefaultsIfMissing()
-        try "---\nname: D · Flashcards\nrequires_slides: false\ncolour: blue\n---\nWrite flashcards.\n"
-            .write(to: dir.appendingPathComponent("D-flashcards.md"), atomically: true, encoding: .utf8)
+        try "---\nname: E · Flashcards\nrequires_slides: false\ncolour: blue\n---\nWrite flashcards.\n"
+            .write(to: dir.appendingPathComponent("E-flashcards.md"), atomically: true, encoding: .utf8)
 
-        let d = try #require(try store.all().first { $0.id == "D-flashcards" })
-        #expect(d == NoteStyle(id: "D-flashcards", name: "D · Flashcards", requiresSlides: false,
+        let e = try #require(try store.all().first { $0.id == "E-flashcards" })
+        #expect(e == NoteStyle(id: "E-flashcards", name: "E · Flashcards", requiresSlides: false,
                                fallbackID: nil, prompt: "Write flashcards."))
-        #expect(try store.all().map(\.id).last == "D-flashcards")
+        #expect(try store.all().map(\.id).last == "E-flashcards")
     }
 
     @Test func missingNameFallsBackToID() throws {
@@ -79,6 +81,15 @@ import Testing
         #expect(style.name == "E-short")
         #expect(style.requiresSlides)
         #expect(style.fallbackID == nil)
+    }
+
+    @Test func slideImagesFlagIsParsedAndOffWhenAbsent() throws {
+        #expect(try StyleStore.parse(id: "X", text: "---\nslide_images: true\n---\nBody\n").slideImages)
+        #expect(try !StyleStore.parse(id: "X", text: "---\nslide_images: false\n---\nBody\n").slideImages)
+        #expect(try !StyleStore.parse(id: "X", text: "---\nname: X\n---\nBody\n").slideImages)
+        #expect(throws: StyleStoreError.malformed("X")) {
+            try StyleStore.parse(id: "X", text: "---\nslide_images: yes\n---\nBody\n")
+        }
     }
 
     @Test func malformedFileIsSkippedByAll() throws {

@@ -52,6 +52,9 @@ public struct PipelineState: Codable, Equatable, Sendable {
     /// The style's short display name for the notes header, recorded at the notes stage so saving
     /// doesn't depend on the style file still being there.
     public var styleName: String?
+    /// Recorded at the notes stage from the style's `slide_images`, so saving puts in the slide images even if
+    /// the style file changed since. nil in states saved before Faden recorded it, which means no.
+    public var slideImages: Bool?
     public var allowAdditions: Bool
     public var language: String?
     /// Recorded by the pipeline from the transcriber it ran with.
@@ -149,6 +152,7 @@ extension PipelineState {
         s.transcriptionModel = previous.transcriptionModel
         s.draftNotesFile = previous.draftNotesFile
         s.styleName = previous.styleName
+        s.slideImages = previous.slideImages
         s.notesCall = previous.notesCall
         s.verifyCall = previous.verifyCall
         s.findings = previous.findings

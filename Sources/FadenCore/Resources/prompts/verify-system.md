@@ -13,7 +13,7 @@ Every statement in the notes carries a label that says where it comes from. Chec
 - `📄` means "from the slides". The label forms are `📄 Folie 12`, `📄 Slide 12–14` and `📄 <file>.pdf, Folie 12`. The word for "slide" follows the notes' language, so it may be another word (for example `Folie`, `Slide`, `Diapositive`). The number is the page in the PDF, counted from 1. Check the statement against those slides.
 - `🗣` means "said in the lecture". The label form is `🗣 [HH:MM:SS]`, with a timestamp matching a transcript line. Check the statement against the transcript around that timestamp.
 
-Do not check lines labelled `💡` (an addition by the note writer) or `✍️` (the student's own notes). They claim no source, so there is nothing to verify. Headings and unlabelled structure need no check either.
+Do not check lines labelled `💡` (an addition by the note writer) or `✍️` (the student's own notes). They claim no source, so there is nothing to verify. Headings and unlabelled structure need no check either. Lines such as `![Folie 12](slide:12)` mark where the app puts the slide's image; ignore them.
 
 ## When a statement is supported
 
