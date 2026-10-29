@@ -42,12 +42,9 @@ public struct NotesHeader: Sendable {
         var cost = unpriced.isEmpty
             ? String(format: "$%.2f", calls.compactMap(\.usd).reduce(0, +))
             : "— (price unknown for \(unpriced.joined(separator: ", ")))"
-        if let limits = calls.last(where: { $0.subscription != nil })?.subscription {
-            cost = "Claude subscription, \(limits.text) used after the run"
-            let api = calls.map(\.apiUSD)
-            if !api.contains(nil) {
-                cost += String(format: " · ≈ $%.2f at API prices", api.compactMap { $0 }.reduce(0, +))
-            }
+        if calls.contains(where: { $0.subscription != nil }) {
+            cost = "Claude subscription"
+            if let use = LimitUse.total(of: calls) { cost += ", limit use: \(use.text)" }
         }
         let checkModel = verifyCall?.model ?? Verifier.model
 
