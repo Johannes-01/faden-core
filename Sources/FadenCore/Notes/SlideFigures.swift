@@ -69,8 +69,9 @@ enum SlideFigures {
 
     // MARK: Rendering
 
-    /// Renders `area` (page space) of the page on white. Rotated pages are rendered whole and upright.
-    private static func render(_ page: CGPDFPage, area: CGRect, scale: CGFloat) -> Data? {
+    /// Renders `area` (page space) of the page on white, as a JPEG or a PNG. Rotated pages are rendered whole
+    /// and upright.
+    static func render(_ page: CGPDFPage, area: CGRect, scale: CGFloat, type: UTType = .jpeg) -> Data? {
         let box = page.getBoxRect(.cropBox)
         let rotated = page.rotationAngle % 180 != 0
         var crop = page.rotationAngle == 0 ? area.intersection(box) : box
@@ -95,8 +96,9 @@ enum SlideFigures {
         ctx.drawPDFPage(page)
         guard let image = ctx.makeImage() else { return nil }
         let data = NSMutableData()
-        guard let dest = CGImageDestinationCreateWithData(data, UTType.jpeg.identifier as CFString, 1, nil) else { return nil }
-        CGImageDestinationAddImage(dest, image, [kCGImageDestinationLossyCompressionQuality: jpegQuality] as CFDictionary)
+        guard let dest = CGImageDestinationCreateWithData(data, type.identifier as CFString, 1, nil) else { return nil }
+        let options = type == .jpeg ? [kCGImageDestinationLossyCompressionQuality: jpegQuality] as CFDictionary : nil
+        CGImageDestinationAddImage(dest, image, options)
         return CGImageDestinationFinalize(dest) ? data as Data : nil
     }
 }

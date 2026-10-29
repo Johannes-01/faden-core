@@ -8,13 +8,17 @@ public struct NoteStyle: Equatable, Sendable {
     public var requiresSlides: Bool
     /// The style to use instead when `requiresSlides` and no slides are attached.
     public var fallbackID: String?
+    /// The notes carry `SlideImages` placeholders, which saving replaces with images of the slides.
+    public var slideImages: Bool
     public var prompt: String
 
-    public init(id: String, name: String, requiresSlides: Bool, fallbackID: String?, prompt: String) {
+    public init(id: String, name: String, requiresSlides: Bool, fallbackID: String?, slideImages: Bool = false,
+                prompt: String) {
         self.id = id
         self.name = name
         self.requiresSlides = requiresSlides
         self.fallbackID = fallbackID
+        self.slideImages = slideImages
         self.prompt = prompt
     }
 }
@@ -95,15 +99,19 @@ public struct StyleStore: Sendable {
             fields[key] = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
         }
 
-        let requiresSlides: Bool
-        switch fields["requires_slides"]?.lowercased() {
-        case nil, "false": requiresSlides = false
-        case "true": requiresSlides = true
-        default: throw StyleStoreError.malformed(id)
+        func flag(_ key: String) throws -> Bool {
+            switch fields[key]?.lowercased() {
+            case nil, "false": false
+            case "true": true
+            default: throw StyleStoreError.malformed(id)
+            }
         }
+        let requiresSlides = try flag("requires_slides")
+        let slideImages = try flag("slide_images")
         let name = fields["name"].flatMap { $0.isEmpty ? nil : $0 } ?? id
         let fallback = fields["fallback"].flatMap { $0.isEmpty ? nil : $0 }
         let prompt = lines[(close + 1)...].joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-        return NoteStyle(id: id, name: name, requiresSlides: requiresSlides, fallbackID: fallback, prompt: prompt)
+        return NoteStyle(id: id, name: name, requiresSlides: requiresSlides, fallbackID: fallback,
+                         slideImages: slideImages, prompt: prompt)
     }
 }

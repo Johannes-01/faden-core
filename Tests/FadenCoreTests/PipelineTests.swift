@@ -270,6 +270,42 @@ actor FakeClient: MessageSending {
         #expect(notes.contains(" · style C · "))
     }
 
+    @Test func styleDPutsTheSlidesIntoTheNotesAsImages() async throws {
+        let env = try makeEnv()
+        defer { env.cleanup() }
+        let deck = env.folder.url.appending(path: "Deck.pdf")
+        try SlideImagesTests.makePDF(at: deck, pages: 2)
+        let draft = "# Linear Algebra\n\n![Folie 1](slide:1)\n\n## Determinant\n\n- 🗣 The determinant is a product.\n"
+        let client = FakeClient([FakeClient.notes(draft), FakeClient.verify()])
+        var start = makeState(env)
+        start.slides = [deck]
+        start.styleID = "D-slides-and-lecture"
+
+        let state = await makePipeline(env, transcriber: FakeTranscriber(), client: client).run(start)
+
+        #expect(state.stage == .done, "\(state.error ?? "")")
+        #expect(state.slideImages == true)
+        let notes = try String(contentsOf: env.folder.notesURL, encoding: .utf8)
+        #expect(notes.contains(" · style D · "))
+        #expect(notes.contains("\n![Folie 1](slide-images/Deck-001.png)\n\n![Folie 2](slide-images/Deck-002.png)\n\n## Determinant\n"))
+        #expect(notes.contains("- 🗣 The determinant is a product. ⚠️ not found in sources"))
+        #expect(!notes.contains("](slide:"))
+        for page in ["001", "002"] {
+            #expect(FileManager.default.fileExists(atPath: env.folder.url.appending(path: "slide-images/Deck-\(page).png").path))
+        }
+    }
+
+    @Test func otherStylesLeaveSlidePlaceholdersAlone() async throws {
+        let env = try makeEnv()
+        defer { env.cleanup() }
+        let client = FakeClient([FakeClient.notes("# T\n\n![x](slide:1)\n"), FakeClient.verify(#"{"unsupported":[]}"#)])
+        let state = await makePipeline(env, transcriber: FakeTranscriber(), client: client).run(makeState(env))
+        #expect(state.stage == .done)
+        #expect(state.slideImages == false)
+        #expect(try String(contentsOf: env.folder.notesURL, encoding: .utf8).contains("![x](slide:1)"))
+        #expect(!FileManager.default.fileExists(atPath: env.folder.url.appending(path: "slide-images").path))
+    }
+
     /// "Process again" with the inputs of a paid draft: the planner carries the draft's fields over.
     private func processAgainState(_ env: Env, from saved: PipelineState) -> PipelineState {
         var s = makeState(env)

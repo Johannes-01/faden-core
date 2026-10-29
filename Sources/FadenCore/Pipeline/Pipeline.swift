@@ -265,6 +265,7 @@ public actor Pipeline {
         try Data(result.text.utf8).write(to: draftURL(Self.draftName), options: .atomic)
         s.draftNotesFile = Self.draftName
         s.styleName = Self.shortName(style)
+        s.slideImages = style.slideImages
         let call = PaidCall(model: result.model, usage: result.usage, subscription: result.subscription,
                             subscriptionBefore: result.subscriptionBefore)
         s.notesCall = call
@@ -326,8 +327,13 @@ public actor Pipeline {
             notesCall: s.notesCall ?? PaidCall(model: NotesPrompt.model, usage: Usage()), verifyCall: s.verifyCall,
             verification: s.verificationSkipped ?? "ok, \(findings.count - merged.unmatched) flagged")
 
+        var notes = merged.notes
+        if s.slideImages == true {
+            notes = try SlideImages.embed(in: notes, slides: s.slides, folder: folder.url)
+        }
+
         let target = folder.newNotesURL(now: now())
-        try Data(header.insert(into: merged.notes).utf8).write(to: target, options: .withoutOverwriting)
+        try Data(header.insert(into: notes).utf8).write(to: target, options: .withoutOverwriting)
         Self.log.info("Saved \(target.lastPathComponent, privacy: .public)")
 
         if s.titleIsPlaceholder, s.slides.isEmpty, let title = Self.title(of: draft) {
@@ -457,6 +463,7 @@ public actor Pipeline {
         case StyleStoreError.notFound(let id): return "Note style \"\(id)\" not found"
         case StyleStoreError.malformed(let id): return "Note style \"\(id)\" could not be read"
         case SlideInputError.unreadablePDF(let name): return "Could not read the PDF \"\(name)\""
+        case SlideImagesError.unrenderablePage(let name, let page): return "Could not render page \(page) of \"\(name)\""
         default: return error.localizedDescription
         }
     }
