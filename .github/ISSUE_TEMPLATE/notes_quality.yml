@@ -1,0 +1,31 @@
+name: Notes quality
+description: The notes were wrong, mislabelled or not useful, or a prompt or style could do better
+labels: [prompts]
+body:
+  - type: markdown
+    attributes:
+      value: Short excerpts help most. Please don't paste whole notes or transcripts of someone else's lecture.
+  - type: dropdown
+    id: style
+    attributes:
+      label: Note style
+      options: [A, B, C, D, A custom style]
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What was wrong
+      description: E.g. a 🗣 line the lecturer never said, a 📄 line not on the slide, a missing topic, a style that didn't fit the course.
+    validations:
+      required: true
+  - type: textarea
+    id: lecture
+    attributes:
+      label: The lecture
+      description: Language, length, number of slides, and whether slides or your own notes were attached.
+  - type: textarea
+    id: excerpt
+    attributes:
+      label: Excerpt
+      render: markdown

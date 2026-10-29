@@ -1,0 +1,32 @@
+name: Bug report
+description: Something in the pipeline or the CLI doesn't work
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Please don't attach recordings, transcripts, slides or notes you have no right to share. A short excerpt with names removed is enough.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you ran, what you expected and what happened instead. Include the error and the stage the run stopped at.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: How to reproduce
+      placeholder: faden process lecture.m4a --slides slides.pdf --out /tmp/try --style C
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The faden-core tag or commit, macOS version and Mac model
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: "Optional: `/usr/bin/log show --last 1h --predicate 'subsystem == \"io.github.johannes-01.faden\"' --info`. It holds file names and timings, no lecture content."
+      render: text
