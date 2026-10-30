@@ -84,7 +84,7 @@ Unclear passages go into an "Unclear in recording" section instead of being fill
     .faden/                     processing state and transcript data
 ```
 
-Slide PDFs are referenced, not copied. Each paid call is also appended to `~/Library/Application Support/Faden/costs.jsonl`; `swift scripts/cost-report.swift [costs.jsonl …]` summarises ledgers into the cost per lecture.
+Slide PDFs are referenced, not copied. Each paid call is also appended to `~/Library/Application Support/Faden/costs.jsonl`, with its step (notes or verify), provider, model, billing (API key or subscription), tokens, what it cost and what it costs at API prices; `swift scripts/cost-report.swift [costs.jsonl …]` summarises ledgers into the cost per lecture.
 
 ## Costs
 

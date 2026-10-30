@@ -269,7 +269,7 @@ public actor Pipeline {
         let call = PaidCall(model: result.model, usage: result.usage, subscription: result.subscription,
                             subscriptionBefore: result.subscriptionBefore)
         s.notesCall = call
-        record(call)
+        record(call, step: .notes)
         s.stage = .verifying
         // Saved straight away: a crash from here on resumes at verifying and never pays for the notes again.
         try checkpoint(s)
@@ -299,7 +299,7 @@ public actor Pipeline {
         let call = PaidCall(model: result.model, usage: result.usage, subscription: result.subscription,
                             subscriptionBefore: result.subscriptionBefore)
         s.verifyCall = call
-        record(call)
+        record(call, step: .verify)
         do {
             s.findings = try Verifier.parse(result.text)
             Self.log.info("Check flagged \(s.findings?.count ?? 0) findings")
@@ -390,11 +390,9 @@ public actor Pipeline {
     }
 
     /// Cost tracking is best effort: a ledger that can't be written must not fail (and re-bill) a paid stage.
-    private func record(_ call: PaidCall) {
+    private func record(_ call: PaidCall, step: CostRecord.Step) {
         do {
-            try ledger.append(CostRecord(
-                date: now(), lecture: folder.url.lastPathComponent, model: call.model, usage: call.usage,
-                usd: call.usd, limitUse: call.limitUse))
+            try ledger.append(CostRecord(date: now(), lecture: folder.url.lastPathComponent, step: step, call: call))
         } catch {
             Self.log.error("Writing the cost ledger failed: \(error, privacy: .public)")
         }

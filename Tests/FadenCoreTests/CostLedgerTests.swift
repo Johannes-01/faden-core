@@ -61,6 +61,51 @@ import Testing
         #expect(try ledger.limitUse(since: nil) == nil)
     }
 
+    @Test func aSubscriptionCallRecordsWhatItWouldHaveCostWithAnAPIKey() {
+        let call = PaidCall(model: "claude-opus-5-5", usage: Usage(inputTokens: 1_000_000),
+                            subscription: SubscriptionLimits(session: 0.1, week: 0.1))
+        let r = CostRecord(date: .now, lecture: "L", step: .verify, call: call)
+        #expect(r.step == .verify)
+        #expect(r.provider == "anthropic")
+        #expect(r.billing == .subscription)
+        #expect(r.usd == 0)
+        #expect(r.apiUSD == 4.0)
+    }
+
+    @Test func anAPICallPaysTheAPIPrice() {
+        let call = PaidCall(model: "claude-opus-5-5", usage: Usage(inputTokens: 1_000_000))
+        let r = CostRecord(date: .now, lecture: "L", step: .notes, call: call)
+        #expect(r.billing == .api)
+        #expect(r.usd == 4.0)
+        #expect(r.apiUSD == 4.0)
+    }
+
+    @Test func linesHaveTheirKeysInTheSameOrder() throws {
+        let file = tempFile()
+        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+        let call = PaidCall(model: "claude-haiku-5-5", usage: Usage(inputTokens: 5, outputTokens: 7))
+        try CostLedger(file: file).append(
+            CostRecord(date: Date(timeIntervalSince1970: 1_700_000_000), lecture: "L", step: .notes, call: call))
+        let line = try String(contentsOf: file, encoding: .utf8).trimmingCharacters(in: .newlines)
+        #expect(line.hasPrefix(#"{"apiUSD":"#))
+        #expect(line.contains(#""billing":"api","date":"2023-11-14T22:13:20Z","lecture":"L","model":"claude-haiku-5-5","provider":"anthropic","step":"notes","usage":{"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"input_tokens":5,"output_tokens":7},"usd":"#))
+    }
+
+    /// Lines written before Faden recorded the API price are priced from their tokens.
+    @Test func apiTotalPricesOldLinesFromTheirTokens() throws {
+        let file = tempFile()
+        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try #"{"date":"2026-10-01T10:00:00Z","lecture":"Old","model":"claude-opus-5-5","usage":{"input_tokens":1000000},"usd":0}"#
+            .appending("\n").write(to: file, atomically: true, encoding: .utf8)
+        let ledger = CostLedger(file: file)
+        let call = PaidCall(model: "claude-opus-5-5", usage: Usage(outputTokens: 1_000_000),
+                            subscription: SubscriptionLimits(session: 0, week: 0))
+        try ledger.append(CostRecord(date: Date(timeIntervalSince1970: 1_800_000_000), lecture: "New", step: .notes, call: call))
+        #expect(try ledger.total(since: nil) == 0)
+        #expect(try ledger.apiTotal(since: nil) == 24.0)
+    }
+
     @Test func skipsUndecodableLinesAndKeepsContent() throws {
         let file = tempFile()
         defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
