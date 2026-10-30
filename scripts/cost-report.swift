@@ -19,6 +19,8 @@ struct Record: Decodable {
     var lecture: String
     var model: String
     var usage: Usage
+    /// `notes` or `verify`; missing in lines written before Faden recorded it.
+    var step: String?
 }
 
 func usd(model: String, usage u: Usage) -> Double? {
@@ -79,7 +81,7 @@ for file in files {
             lectures[key] = Lecture(file: file.lastPathComponent, name: r.lecture)
             order.append(key)
         }
-        if r.model == "claude-opus-5-5" { lectures[key]!.runs += 1 }
+        if (r.step ?? (r.model == "claude-opus-5-5" ? "notes" : "verify")) == "notes" { lectures[key]!.runs += 1 }
         lectures[key]!.inputTokens += r.usage.input_tokens + r.usage.cache_read_input_tokens
             + r.usage.cache_creation_input_tokens
         lectures[key]!.outputTokens += r.usage.output_tokens
