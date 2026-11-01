@@ -33,6 +33,7 @@ public actor Pipeline {
     private let ledger: CostLedger
     private let now: @Sendable () -> Date
     private let duration: DurationLoader
+    private let notesModel: String
     /// True while `run` or `retry` is working; a second call meanwhile returns `current` unchanged.
     private var isRunning = false
     /// The state of the run in progress, or of the last one.
@@ -46,7 +47,7 @@ public actor Pipeline {
 
     public init(folder: LectureFolder, transcriber: Transcriber, client: MessageSending, styles: StyleStore,
                 ledger: CostLedger, now: @escaping @Sendable () -> Date,
-                duration: @escaping DurationLoader = Pipeline.audioDuration) {
+                duration: @escaping DurationLoader = Pipeline.audioDuration, notesModel: String = NotesPrompt.model) {
         self.folder = folder
         self.transcriber = transcriber
         self.client = client
@@ -54,6 +55,7 @@ public actor Pipeline {
         self.ledger = ledger
         self.now = now
         self.duration = duration
+        self.notesModel = notesModel
         (progress, continuation) = AsyncStream.makeStream(of: Stage.self)
     }
 
@@ -257,7 +259,7 @@ public actor Pipeline {
         let style = try styles.resolve(id: s.styleID, hasSlides: !s.slides.isEmpty)
         let request = try NotesPrompt.request(NotesInputs(
             transcript: try loadTranscript(), slides: s.slides, userNotes: s.userNotes, style: style,
-            allowAdditions: s.allowAdditions, languageOverride: s.language))
+            allowAdditions: s.allowAdditions, languageOverride: s.language, model: notesModel))
         let result = try await client.send(request)
         Self.logCall("Notes", result)
 
@@ -324,7 +326,7 @@ public actor Pipeline {
         let header = NotesHeader(
             date: now(), style: styleName, slides: s.slides.map(\.lastPathComponent),
             audio: s.audio.map(\.lastPathComponent), userNotes: s.userNotes?.lastPathComponent,
-            notesCall: s.notesCall ?? PaidCall(model: NotesPrompt.model, usage: Usage()), verifyCall: s.verifyCall,
+            notesCall: s.notesCall ?? PaidCall(model: notesModel, usage: Usage()), verifyCall: s.verifyCall,
             verification: s.verificationSkipped ?? "ok, \(findings.count - merged.unmatched) flagged")
 
         var notes = merged.notes

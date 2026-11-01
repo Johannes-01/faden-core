@@ -80,6 +80,12 @@ import Testing
         #expect(r.apiUSD == 4.0)
     }
 
+    @Test func sonnetCostsHalfOfOpus() {
+        let usage = Usage(inputTokens: 1_000_000, outputTokens: 1_000_000, cacheCreationInputTokens: 1_000_000,
+                          cacheReadInputTokens: 1_000_000)
+        #expect(Pricing.usd(model: "claude-sonnet-5-5", usage: usage) == 2.0 + 10.0 + 0.2 + 2.5)
+    }
+
     @Test func linesHaveTheirKeysInTheSameOrder() throws {
         let file = tempFile()
         defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }

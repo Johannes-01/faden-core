@@ -8,15 +8,18 @@ public struct NotesInputs: Sendable {
     public var allowAdditions: Bool
     /// A language code such as `de` or `en`; nil means the lecture's own language.
     public var languageOverride: String?
+    /// The model that writes the notes.
+    public var model: String
 
     public init(transcript: Transcript, slides: [URL], userNotes: URL?, style: NoteStyle,
-                allowAdditions: Bool, languageOverride: String?) {
+                allowAdditions: Bool, languageOverride: String?, model: String = NotesPrompt.model) {
         self.transcript = transcript
         self.slides = slides
         self.userNotes = userNotes
         self.style = style
         self.allowAdditions = allowAdditions
         self.languageOverride = languageOverride
+        self.model = model
     }
 }
 
@@ -24,9 +27,9 @@ public enum NotesPromptError: Error, Equatable {
     case missingResource(String)
 }
 
-/// Builds the Opus request that writes the lecture notes.
+/// Builds the request that writes the lecture notes.
 public enum NotesPrompt {
-    /// The model the notes call asks for.
+    /// The model the notes call asks for unless `NotesInputs.model` says otherwise.
     public static let model = "claude-opus-5-5"
 
     public static func request(_ i: NotesInputs) throws -> MessageRequest {
@@ -48,7 +51,7 @@ public enum NotesPrompt {
         content.append(.text(i.transcript.markdown(), cache: false))
 
         return MessageRequest(
-            model: model,
+            model: i.model,
             maxTokens: 64000,
             stream: true,
             system: [.text(system, cache: false)],

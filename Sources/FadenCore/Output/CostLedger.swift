@@ -15,6 +15,8 @@ public enum Pricing {
         switch model {
         case "claude-opus-5-5":
             (input, output, cacheRead, cacheWrite) = (4.00, 20.00, 0.20, 5.00)
+        case "claude-sonnet-5-5":
+            (input, output, cacheRead, cacheWrite) = (2.00, 10.00, 0.20, 2.50)
         case "claude-haiku-5-5":
             let prompt = usage.inputTokens + usage.cacheReadInputTokens + usage.cacheCreationInputTokens
             let long = prompt > 100_000

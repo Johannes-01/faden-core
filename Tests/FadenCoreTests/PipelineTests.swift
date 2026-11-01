@@ -168,6 +168,20 @@ actor FakeClient: MessageSending {
         #expect(saved.stage == .done)
     }
 
+    @Test func theNotesGoToTheChosenModelAndTheCheckStaysOnHaiku() async throws {
+        let env = try makeEnv()
+        defer { env.cleanup() }
+        let client = FakeClient([FakeClient.notes(), FakeClient.verify()])
+        let pipeline = Pipeline(folder: env.folder, transcriber: FakeTranscriber(), client: client, styles: env.styles,
+                                ledger: env.ledger, now: { PipelineTests.now }, duration: { _ in 60 },
+                                notesModel: "claude-sonnet-5-5")
+
+        let state = await pipeline.run(makeState(env))
+
+        #expect(state.stage == .done)
+        #expect(await client.models == ["claude-sonnet-5-5", "claude-haiku-5-5"])
+    }
+
     @Test func progressReportsEachStage() async throws {
         let env = try makeEnv()
         defer { env.cleanup() }

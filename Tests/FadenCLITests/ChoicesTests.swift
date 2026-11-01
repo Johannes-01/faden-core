@@ -75,3 +75,11 @@ private let ids = ["A-slide-by-slide", "B-by-topic", "C-red-line", "D-slides-and
     #expect(throws: (any Error).self) { try Faden.ProcessCommand.parse(["--out", "x"]) }
     #expect(throws: (any Error).self) { try Faden.ProcessCommand.parse(["a.m4a"]) }
 }
+
+@Test func notesModelNamesMeanTheirModelIds() throws {
+    #expect(NotesModelOption.opus.id == NotesPrompt.model)
+    #expect(NotesModelOption.sonnet.id == "claude-sonnet-5-5")
+    #expect(NotesModelOption.haiku.id == "claude-haiku-5-5")
+    #expect(try RunOptions.parse([]).notesModel == .opus)
+    #expect(try RunOptions.parse(["--notes-model", "sonnet"]).notesModel == .sonnet)
+}

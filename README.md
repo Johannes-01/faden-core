@@ -37,7 +37,7 @@ faden process lecture.m4a --slides 03-sorting.pdf --notes my-notes.md --out ~/Le
 
 This creates `~/Lectures/Algorithms/<date> <title>/`, named after the first slide PDF (or, without slides, after the notes' title), with `notes.md`, `transcript.md`, the copied audio and the run's state in `.faden/`. The path of the notes file is printed on stdout, and progress goes to stderr.
 
-- `faden process <audio…> --out <course folder>`: several audio files are joined in the order given. Options: `--slides <pdf…>`, `--notes <file>` (Markdown, text or PDF), `--style <id or letter>` (default `C`), `--no-additions` (no 💡 lines), `--language de|en` (detected otherwise), `--model fast|accurate` (speech model), `--retranscribe`.
+- `faden process <audio…> --out <course folder>`: several audio files are joined in the order given. Options: `--slides <pdf…>`, `--notes <file>` (Markdown, text or PDF), `--style <id or letter>` (default `C`), `--no-additions` (no 💡 lines), `--language de|en` (detected otherwise), `--model fast|accurate` (speech model), `--notes-model opus|sonnet|haiku` (the model that writes the notes; default opus, the check always uses Haiku), `--retranscribe`.
 - `faden retry <lecture folder>`: continues a failed or interrupted run (a network error, Ctrl-C) from the stage where it stopped. Stages that were already paid for are not paid for again.
 - `faden styles`: lists the note styles.
 - `--subscription`: sends the calls through the local `claude` CLI on your Claude subscription instead of the API. For personal use; the notes header then shows how much of the session and weekly limit the run used.
