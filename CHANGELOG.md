@@ -4,6 +4,10 @@ The `public` API of `FadenCore` and `FadenTranscription` is the contract with th
 
 ## Unreleased
 
+- The notes model can be chosen: `NotesInputs.model` and `Pipeline(…, notesModel:)`, both defaulting to `NotesPrompt.model` (Opus 5.5). The check stays on Haiku 5.5.
+- `faden process` and `faden retry` take `--notes-model opus|sonnet|sonnet-5|haiku` (`sonnet` is Sonnet 5.5).
+- `Pricing` knows `claude-sonnet-5-5` and `claude-sonnet-5` (both $2 / $10 per MTok; cache reads $0.10 and $0.20).
+
 ## 0.3.0 - 2026-10-30
 
 - Each `costs.jsonl` line now also records the pipeline `step` (`notes` or `verify`), the `provider` (`anthropic`), the `billing` (`api` or `subscription`) and `apiUSD`, what the call costs with an API key even when it ran on the subscription. `usd` still holds what was paid. Older lines decode with these fields as nil.

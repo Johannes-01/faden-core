@@ -21,6 +21,10 @@ struct RunOptions: ParsableArguments {
     @Option(help: "The speech model: fast (small) or accurate (large, a big first download).")
     var model: ModelOption = .fast
 
+    @Option(help: ArgumentHelp("The model that writes the notes: opus, sonnet (5.5), sonnet-5 or haiku. The check always uses haiku.",
+                               valueName: "model"))
+    var notesModel: NotesModelOption = .opus
+
     @Flag(help: "Send the calls through the local claude CLI on your Claude subscription instead of an API key.")
     var subscription = false
 
@@ -46,6 +50,19 @@ enum ModelOption: String, CaseIterable, ExpressibleByArgument {
         switch self {
         case .fast: .fast
         case .accurate: .accurate
+        }
+    }
+}
+
+enum NotesModelOption: String, CaseIterable, ExpressibleByArgument {
+    case opus, sonnet, sonnet5 = "sonnet-5", haiku
+
+    var id: String {
+        switch self {
+        case .opus: NotesPrompt.model
+        case .sonnet: "claude-sonnet-5-5"
+        case .sonnet5: "claude-sonnet-5"
+        case .haiku: "claude-haiku-5-5"
         }
     }
 }
@@ -162,7 +179,7 @@ enum PipelineRun {
     static func make(folder: LectureFolder, options: RunOptions, styles: StyleStore) throws -> Pipeline {
         let client = try ClientChoice.make(subscription: options.subscription, environment: ProcessInfo.processInfo.environment)
         return Pipeline(folder: folder, transcriber: WhisperKitTranscriber(model: options.model.model), client: client,
-                        styles: styles, ledger: CostLedger(), now: { Date() })
+                        styles: styles, ledger: CostLedger(), now: { Date() }, notesModel: options.notesModel.id)
     }
 
     /// Prints each stage as it starts, runs `work`, then prints where the notes went or throws with the error.

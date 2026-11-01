@@ -135,6 +135,9 @@ import Testing
         let json = try body(request)
 
         #expect(json["model"] as? String == "claude-opus-5-5")
+        var sonnet = inputs()
+        sonnet.model = "claude-sonnet-5-5"
+        #expect(try body(NotesPrompt.request(sonnet))["model"] as? String == "claude-sonnet-5-5")
         #expect(json["max_tokens"] as? Int == 64000)
         #expect(json["stream"] as? Bool == true)
         #expect(json["fallbacks"] as? String == "default")
