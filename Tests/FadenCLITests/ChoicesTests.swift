@@ -79,7 +79,9 @@ private let ids = ["A-slide-by-slide", "B-by-topic", "C-red-line", "D-slides-and
 @Test func notesModelNamesMeanTheirModelIds() throws {
     #expect(NotesModelOption.opus.id == NotesPrompt.model)
     #expect(NotesModelOption.sonnet.id == "claude-sonnet-5-5")
+    #expect(NotesModelOption.sonnet5.id == "claude-sonnet-5")
     #expect(NotesModelOption.haiku.id == "claude-haiku-5-5")
+    #expect(try RunOptions.parse(["--notes-model", "sonnet-5"]).notesModel == .sonnet5)
     #expect(try RunOptions.parse([]).notesModel == .opus)
     #expect(try RunOptions.parse(["--notes-model", "sonnet"]).notesModel == .sonnet)
 }
