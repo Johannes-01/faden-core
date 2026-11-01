@@ -4,6 +4,8 @@ The `public` API of `FadenCore` and `FadenTranscription` is the contract with th
 
 ## Unreleased
 
+- `ClaudeCLIClient` reports a reply the `claude` CLI resumed after the output limit as `AnthropicError.truncated`. The CLI asks the model to "resume directly" on its own and then returned only the last part as a success, so `--subscription` runs could save cut-off notes as complete (#6).
+
 - The notes model can be chosen: `NotesInputs.model` and `Pipeline(…, notesModel:)`, both defaulting to `NotesPrompt.model` (Opus 5.5). The check stays on Haiku 5.5.
 - `faden process` and `faden retry` take `--notes-model opus|sonnet|sonnet-5|haiku` (`sonnet` is Sonnet 5.5).
 - `Pricing` knows `claude-sonnet-5-5` and `claude-sonnet-5` (both $2 / $10 per MTok; cache reads $0.10 and $0.20).
