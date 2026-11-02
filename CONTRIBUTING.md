@@ -47,3 +47,7 @@ The labels are the point of Faden: a change that makes the notes nicer but puts 
 - By contributing, you agree that your contribution is licensed under the [MIT License](LICENSE).
 
 Please follow the [code of conduct](CODE_OF_CONDUCT.md).
+
+### Releases
+
+Move the "Unreleased" entries in CHANGELOG.md to a new version heading (`## 0.5.0 - <date>`), merge that, then tag the merge commit (`git tag -a 0.5.0 -m 0.5.0 && git push origin 0.5.0`). The Release workflow publishes a GitHub release with that changelog section and the `faden` CLI; it refuses a tag without a changelog section.

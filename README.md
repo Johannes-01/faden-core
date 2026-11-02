@@ -30,6 +30,8 @@ FADEN_INTEGRATION=1 FADEN_ACCURATE=1 scripts/test.sh   # also the large model (b
 
 ## The `faden` CLI
 
+Each [release](https://github.com/Johannes-01/faden-core/releases) has a prebuilt `faden` for Apple silicon (`faden-<version>-macos-arm64.tar.gz`); keep the binary and `faden-core_FadenCore.bundle` in the same folder. It is not notarized, so run `xattr -d com.apple.quarantine faden` once after downloading, or build it yourself as above.
+
 ```sh
 export ANTHROPIC_API_KEY=sk-ant-...
 faden process lecture.m4a --slides 03-sorting.pdf --notes my-notes.md --out ~/Lectures/Algorithms --style C
