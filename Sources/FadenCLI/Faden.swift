@@ -21,7 +21,7 @@ struct RunOptions: ParsableArguments {
     @Option(help: "The speech model: fast (small) or accurate (large, a big first download).")
     var model: ModelOption = .fast
 
-    @Option(help: ArgumentHelp("The model that writes the notes: opus, sonnet (5.5), sonnet-5 or haiku. The check always uses haiku.",
+    @Option(help: ArgumentHelp("The model that writes the notes: opus, sonnet (5.5) or sonnet-5. The check always uses Haiku 5.5.",
                                valueName: "model"))
     var notesModel: NotesModelOption = .opus
 
@@ -55,14 +55,13 @@ enum ModelOption: String, CaseIterable, ExpressibleByArgument {
 }
 
 enum NotesModelOption: String, CaseIterable, ExpressibleByArgument {
-    case opus, sonnet, sonnet5 = "sonnet-5", haiku
+    case opus, sonnet, sonnet5 = "sonnet-5"
 
     var id: String {
         switch self {
         case .opus: NotesPrompt.model
         case .sonnet: "claude-sonnet-5-5"
         case .sonnet5: "claude-sonnet-5"
-        case .haiku: "claude-haiku-5-5"
         }
     }
 }
