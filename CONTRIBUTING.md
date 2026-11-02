@@ -21,7 +21,7 @@ Thanks for helping. Bug reports, fixes and better prompts are all welcome.
 
 ### The public API
 
-The Faden app depends on `FadenCore` and `FadenTranscription` through their `public` API, by version. If your change adds, changes or removes anything `public`, say so in the pull request and add a line under "Unreleased" in [CHANGELOG.md](CHANGELOG.md).
+The Faden app depends on `FadenCore` and `FadenTranscription` through their `public` API, by version. If your change adds, changes or removes anything `public`, say so in the pull request and add a line under "Unreleased" in [CHANGELOG.md](CHANGELOG.md). CI compares the public API with the latest release on every pull request and warns about breaking changes; run `scripts/api-check.sh` to see the same locally.
 
 ## Changing prompts and styles
 
