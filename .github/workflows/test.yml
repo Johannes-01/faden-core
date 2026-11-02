@@ -5,11 +5,18 @@ on:
     branches: [main]
   pull_request:
 
+# A new push to a pull request stops its older run; runs on main always finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test:
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the API check compares against the latest tag
       - uses: actions/cache@v4
         with:
           path: .build
@@ -20,3 +27,11 @@ jobs:
       - name: Unit tests
         # Integration tests (FADEN_INTEGRATION=1) need the Keychain and the speech models; they run locally.
         run: scripts/test.sh
+      - name: Release build
+        # The faden CLI ships as a release build; some errors only show with optimisation on.
+        run: swift build -c release
+      - name: Public API against the latest release
+        # A warning, not a failure: adding a defaulted parameter is reported as breaking, though calls still compile.
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        run: scripts/api-check.sh
