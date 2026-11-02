@@ -23,8 +23,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.TAG }}
+      # The release scripts come from the workflow's own commit, so a tag made before them can be released too.
+      - uses: actions/checkout@v4
+        with:
+          path: .release-tools
+          sparse-checkout: scripts
       - name: Release notes
-        run: scripts/release-notes.sh "$TAG" > notes.md
+        run: .release-tools/scripts/release-notes.sh "$TAG" CHANGELOG.md > notes.md
       - name: Unit tests
         run: scripts/test.sh
       - name: Build the CLI
