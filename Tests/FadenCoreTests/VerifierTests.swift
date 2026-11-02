@@ -42,6 +42,11 @@ import Testing
         #expect(props == ["quote": ["type": "string"], "reason": ["type": "string"]])
     }
 
+    @Test func theCheckAsksTheChosenModel() throws {
+        let request = try Verifier.request(notes: "# T", transcript: transcript, slides: [], model: "claude-sonnet-5-5")
+        #expect(try body(request)["model"] as? String == "claude-sonnet-5-5")
+    }
+
     @Test func requestSendsSlidesThenTranscriptThenNotes() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("faden-verify-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

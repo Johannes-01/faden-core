@@ -33,7 +33,9 @@ public actor Pipeline {
     private let ledger: CostLedger
     private let now: @Sendable () -> Date
     private let duration: DurationLoader
+    /// The models for a state that names none (`PipelineState.notesModel`, `checkModel`).
     private let notesModel: String
+    private let checkModel: String
     /// True while `run` or `retry` is working; a second call meanwhile returns `current` unchanged.
     private var isRunning = false
     /// The state of the run in progress, or of the last one.
@@ -47,7 +49,8 @@ public actor Pipeline {
 
     public init(folder: LectureFolder, transcriber: Transcriber, client: MessageSending, styles: StyleStore,
                 ledger: CostLedger, now: @escaping @Sendable () -> Date,
-                duration: @escaping DurationLoader = Pipeline.audioDuration, notesModel: String = NotesPrompt.model) {
+                duration: @escaping DurationLoader = Pipeline.audioDuration, notesModel: String = NotesPrompt.model,
+                checkModel: String = Verifier.model) {
         self.folder = folder
         self.transcriber = transcriber
         self.client = client
@@ -56,6 +59,7 @@ public actor Pipeline {
         self.now = now
         self.duration = duration
         self.notesModel = notesModel
+        self.checkModel = checkModel
         (progress, continuation) = AsyncStream.makeStream(of: Stage.self)
     }
 
@@ -139,6 +143,9 @@ public actor Pipeline {
         s.error = nil
         s.failedStage = nil
         if s.stage == .ready { s.stage = .transcribing }
+        // Recorded, so a retry asks the same models even if the pipeline's defaults change meanwhile.
+        if s.notesModel == nil { s.notesModel = notesModel }
+        if s.checkModel == nil { s.checkModel = checkModel }
         let lecture = folder.url.lastPathComponent
         Self.log.notice("Run of \(lecture, privacy: .public) starts at \(s.stage.rawValue, privacy: .public) with \(s.audio.count) audio files and \(s.slides.count) slide files")
         // Checked before anything is paid for: a deleted input file is never silently dropped.
@@ -259,7 +266,7 @@ public actor Pipeline {
         let style = try styles.resolve(id: s.styleID, hasSlides: !s.slides.isEmpty)
         let request = try NotesPrompt.request(NotesInputs(
             transcript: try loadTranscript(), slides: s.slides, userNotes: s.userNotes, style: style,
-            allowAdditions: s.allowAdditions, languageOverride: s.language, model: notesModel))
+            allowAdditions: s.allowAdditions, languageOverride: s.language, model: s.notesModel ?? notesModel))
         let result = try await client.send(request)
         Self.logCall("Notes", result)
 
@@ -287,7 +294,8 @@ public actor Pipeline {
         s.verificationSkipped = nil
         let result: MessageResult
         do {
-            let request = try Verifier.request(notes: notes, transcript: try loadTranscript(), slides: s.slides)
+            let request = try Verifier.request(notes: notes, transcript: try loadTranscript(), slides: s.slides,
+                                               model: s.checkModel ?? checkModel)
             result = try await client.send(request)
         } catch {
             // Cancelling stops the run here; only real failures of the check are skipped.
@@ -326,8 +334,9 @@ public actor Pipeline {
         let header = NotesHeader(
             date: now(), style: styleName, slides: s.slides.map(\.lastPathComponent),
             audio: s.audio.map(\.lastPathComponent), userNotes: s.userNotes?.lastPathComponent,
-            notesCall: s.notesCall ?? PaidCall(model: notesModel, usage: Usage()), verifyCall: s.verifyCall,
-            verification: s.verificationSkipped ?? "ok, \(findings.count - merged.unmatched) flagged")
+            notesCall: s.notesCall ?? PaidCall(model: s.notesModel ?? notesModel, usage: Usage()), verifyCall: s.verifyCall,
+            verification: s.verificationSkipped ?? "ok, \(findings.count - merged.unmatched) flagged",
+            checkModel: s.checkModel ?? checkModel)
 
         var notes = merged.notes
         if s.slideImages == true {

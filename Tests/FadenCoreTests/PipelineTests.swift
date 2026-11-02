@@ -182,6 +182,65 @@ actor FakeClient: MessageSending {
         #expect(await client.models == ["claude-sonnet-5-5", "claude-haiku-5-5"])
     }
 
+    @Test func theCheckGoesToTheChosenModelAndBothModelsAreRecorded() async throws {
+        let env = try makeEnv()
+        defer { env.cleanup() }
+        let client = FakeClient([FakeClient.notes(), FakeClient.verify()])
+        let pipeline = Pipeline(folder: env.folder, transcriber: FakeTranscriber(), client: client, styles: env.styles,
+                                ledger: env.ledger, now: { PipelineTests.now }, duration: { _ in 60 },
+                                notesModel: "claude-sonnet-5", checkModel: "claude-sonnet-5-5")
+
+        let state = await pipeline.run(makeState(env))
+
+        #expect(state.stage == .done)
+        #expect(await client.models == ["claude-sonnet-5", "claude-sonnet-5-5"])
+        let saved = try #require(PipelineState.saved(in: env.folder))
+        #expect(saved.notesModel == "claude-sonnet-5")
+        #expect(saved.checkModel == "claude-sonnet-5-5")
+    }
+
+    @Test func theStatesModelsWinOverThePipelines() async throws {
+        let env = try makeEnv()
+        defer { env.cleanup() }
+        let client = FakeClient([FakeClient.notes(), FakeClient.verify()])
+        var start = makeState(env)
+        start.notesModel = "claude-sonnet-5-5"
+        start.checkModel = "claude-opus-5-5"
+
+        let state = await makePipeline(env, transcriber: FakeTranscriber(), client: client).run(start)
+
+        #expect(state.stage == .done)
+        #expect(await client.models == ["claude-sonnet-5-5", "claude-opus-5-5"])
+    }
+
+    @Test func retryAsksTheModelsTheRunStartedWith() async throws {
+        let env = try makeEnv()
+        defer { env.cleanup() }
+        let failing = FakeClient([.failure(AnthropicError.network("down"))])
+        let first = await Pipeline(folder: env.folder, transcriber: FakeTranscriber(), client: failing, styles: env.styles,
+                                   ledger: env.ledger, now: { PipelineTests.now }, duration: { _ in 60 },
+                                   notesModel: "claude-sonnet-5-5", checkModel: "claude-sonnet-5-5").run(makeState(env))
+        #expect(first.failedStage == .writingNotes)
+
+        // The pipeline's defaults changed since (e.g. Settings): the retry still asks the saved models.
+        let client = FakeClient([FakeClient.notes(), FakeClient.verify()])
+        let retried = await makePipeline(env, transcriber: FakeTranscriber(), client: client).retry()
+
+        #expect(retried.stage == .done)
+        #expect(await client.models == ["claude-sonnet-5-5", "claude-sonnet-5-5"])
+    }
+
+    @Test func aStateSavedBeforeTheModelsWereRecordedDecodesWithout() throws {
+        let env = try makeEnv()
+        defer { env.cleanup() }
+        var json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(makeState(env))) as! [String: Any]
+        json["notesModel"] = nil
+        json["checkModel"] = nil
+        let state = try JSONDecoder().decode(PipelineState.self, from: JSONSerialization.data(withJSONObject: json))
+        #expect(state.notesModel == nil)
+        #expect(state.checkModel == nil)
+    }
+
     @Test func progressReportsEachStage() async throws {
         let env = try makeEnv()
         defer { env.cleanup() }
@@ -397,6 +456,55 @@ actor FakeClient: MessageSending {
 
         #expect(again.stage == .done)
         #expect(await client.models == ["claude-haiku-5-5"])
+    }
+
+    @Test func processAgainWithAnotherCheckModelOnlyRunsTheCheck() async throws {
+        let env = try makeEnv()
+        defer { env.cleanup() }
+        let first = await failedRunWithAPaidDraft(env)
+        #expect(first.checkModel == Verifier.model)
+
+        var again = makeState(env)
+        again.checkModel = "claude-sonnet-5-5"
+        again = again.carryingPaidDraft(from: first)
+        #expect(again.notesCall != nil)
+        #expect(again.verifyCall == nil)
+
+        let client = FakeClient([FakeClient.verify()])
+        let done = await makePipeline(env, transcriber: FakeTranscriber(), client: client).run(again)
+
+        #expect(done.stage == .done)
+        #expect(await client.models == ["claude-sonnet-5-5"])
+        #expect(done.checkModel == "claude-sonnet-5-5")
+    }
+
+    @Test func processAgainWithAnotherNotesModelPaysForNewNotes() async throws {
+        let env = try makeEnv()
+        defer { env.cleanup() }
+        let first = await failedRunWithAPaidDraft(env)
+        #expect(first.notesModel == NotesPrompt.model)
+
+        var again = makeState(env)
+        again.notesModel = "claude-sonnet-5-5"
+        again = again.carryingPaidDraft(from: first)
+        #expect(again.notesCall == nil)
+
+        let client = FakeClient([FakeClient.notes(), FakeClient.verify()])
+        let done = await makePipeline(env, transcriber: FakeTranscriber(), client: client).run(again)
+        #expect(done.stage == .done)
+        #expect(await client.models == ["claude-sonnet-5-5", Verifier.model])
+    }
+
+    @Test func aStateWithoutModelsCountsAsTheDefaults() {
+        var previous = PipelineState(stage: .failed, audio: [URL(filePath: "/a.m4a")], styleID: "C", allowAdditions: true)
+        previous.draftNotesFile = "draft-notes.md"
+        previous.notesCall = PaidCall(model: NotesPrompt.model, usage: Usage())
+        previous.verifyCall = PaidCall(model: Verifier.model, usage: Usage())
+        let fresh = PipelineState(audio: [URL(filePath: "/a.m4a")], styleID: "C", allowAdditions: true,
+                                  notesModel: NotesPrompt.model, checkModel: Verifier.model)
+        let carried = fresh.carryingPaidDraft(from: previous)
+        #expect(carried.notesCall != nil)
+        #expect(carried.verifyCall != nil)
     }
 
     @Test func processAgainPaysWhenTheDraftCantBeReused() async throws {
