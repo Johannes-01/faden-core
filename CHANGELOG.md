@@ -4,6 +4,8 @@ The `public` API of `FadenCore` and `FadenTranscription` is the contract with th
 
 ## Unreleased
 
+## 0.5.0 - 2026-11-02
+
 - The check model can be chosen too: `Pipeline(…, checkModel:)` (default `Verifier.model`, Haiku 5.5) and `Verifier.request(…, model:)`.
 - `PipelineState` records `notesModel` and `checkModel`. A run fills in the pipeline's models where the state names none, so a retry asks the same models as the run it continues. Both are optional: `state.json` files saved before decode with nil, which means the pipeline's models. `PipelineState.init` and `ReprocessRequest` take them too (`ReprocessRequest.notesModel`, `.checkModel`, nil by default).
 - `carryingPaidDraft(from:)` reuses a paid draft only when it was written by the same notes model, and its check only when the check model is the same too; with a new check model, Process again only runs the check.
