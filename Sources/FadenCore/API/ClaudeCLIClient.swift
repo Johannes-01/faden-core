@@ -179,7 +179,9 @@ public struct ClaudeCLIClient: MessageSending {
     ///
     /// With tools off, a call has one assistant reply. When the reply hits the output limit, the CLI asks the
     /// model to resume on its own (a `user` event, then another reply), and `result` then holds only the last
-    /// reply as a success. More than one reply, or any `user` event, is therefore a truncation.
+    /// reply as a success. More than one reply, or a `user` event, is therefore a truncation. The exception is the
+    /// `tool_result` that answers the CLI's own `StructuredOutput` tool, with which it returns a `--json-schema`
+    /// reply: that `user` event is part of a complete answer (`Fixtures/cli-schema-ok.jsonl`).
     static func parse(_ output: Output, requestedModel: String) throws -> MessageResult {
         var result: [String: Any]?
         var model: String?
@@ -193,7 +195,10 @@ public struct ClaudeCLIClient: MessageSending {
                 if let m = message?["model"] as? String { model = m }
                 if let id = message?["id"] as? String { replyIDs.insert(id) }
             case "user":
-                resumed = true
+                let content = (event["message"] as? [String: Any])?["content"]
+                let blocks = content as? [[String: Any]] ?? []
+                let onlyToolResults = !blocks.isEmpty && blocks.allSatisfy { $0["type"] as? String == "tool_result" }
+                if !onlyToolResults { resumed = true }
             case "result":
                 result = event
             default:

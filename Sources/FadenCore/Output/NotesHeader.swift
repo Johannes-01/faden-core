@@ -32,6 +32,23 @@ public struct NotesHeader: Sendable {
         self.checkModel = checkModel
     }
 
+    /// What `calls` cost, as the header's Cost line says it: `$0.82 (152340 in / 9870 out tokens)`, or the
+    /// Claude subscription and its limit use. An unpriced call shows as unknown, never as $0.
+    public static func cost(of calls: [PaidCall]) -> String {
+        let usages = calls.map(\.usage)
+        let tokensIn = usages.reduce(0) { $0 + $1.inputTokens + $1.cacheReadInputTokens + $1.cacheCreationInputTokens }
+        let tokensOut = usages.reduce(0) { $0 + $1.outputTokens }
+        let unpriced = calls.filter { $0.usd == nil }.map(\.model)
+        var cost = unpriced.isEmpty
+            ? String(format: "$%.2f", calls.compactMap(\.usd).reduce(0, +))
+            : "— (price unknown for \(unpriced.joined(separator: ", ")))"
+        if calls.contains(where: { $0.subscription != nil }) {
+            cost = "Claude subscription"
+            if let use = LimitUse.total(of: calls) { cost += ", limit use: \(use.text)" }
+        }
+        return "\(cost) (\(tokensIn) in / \(tokensOut) out tokens)"
+    }
+
     public func markdown() -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -42,18 +59,6 @@ public struct NotesHeader: Sendable {
         func list(_ items: [String]) -> String { items.isEmpty ? "none" : items.joined(separator: ", ") }
 
         let calls = [notesCall] + (verifyCall.map { [$0] } ?? [])
-        let usages = calls.map(\.usage)
-        let tokensIn = usages.reduce(0) { $0 + $1.inputTokens + $1.cacheReadInputTokens + $1.cacheCreationInputTokens }
-        let tokensOut = usages.reduce(0) { $0 + $1.outputTokens }
-        // An unpriced call shows as unknown, never as $0.
-        let unpriced = calls.filter { $0.usd == nil }.map(\.model)
-        var cost = unpriced.isEmpty
-            ? String(format: "$%.2f", calls.compactMap(\.usd).reduce(0, +))
-            : "— (price unknown for \(unpriced.joined(separator: ", ")))"
-        if calls.contains(where: { $0.subscription != nil }) {
-            cost = "Claude subscription"
-            if let use = LimitUse.total(of: calls) { cost += ", limit use: \(use.text)" }
-        }
         let checkModel = verifyCall?.model ?? self.checkModel ?? Verifier.model
 
         return [
@@ -61,7 +66,7 @@ public struct NotesHeader: Sendable {
             "> Sources: slides \(list(slides)) · audio \(list(audio)) · my notes \(userNotes ?? "none")",
             "> Labels: 📄 slides · 🗣 lecture · 💡 model addition · ✍️ my notes · ⚠️ not found in sources",
             "> Verification: \(verification)",
-            "> Cost: \(cost) (\(tokensIn) in / \(tokensOut) out tokens)",
+            "> Cost: \(Self.cost(of: calls))",
             "",
             "",
         ].joined(separator: "\n")

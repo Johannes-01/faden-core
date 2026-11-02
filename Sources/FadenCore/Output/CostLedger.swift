@@ -41,6 +41,8 @@ public struct CostRecord: Codable, Sendable {
     /// The pipeline stage that made a call.
     public enum Step: String, Codable, Sendable {
         case notes, verify
+        /// Flashcards made from a lecture's notes, and a study guide from a course's.
+        case flashcards, studyGuide
     }
 
     /// How a call was paid for.

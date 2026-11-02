@@ -95,3 +95,12 @@ private let ids = ["A-slide-by-slide", "B-by-topic", "C-red-line", "D-slides-and
     #expect(try RunOptions.parse(["--check-model", "opus"]).checkModel == .opus)
     #expect(throws: (any Error).self) { try RunOptions.parse(["--check-model", "gpt"]) }
 }
+
+@Test func studyCommandsParseTheirOptions() throws {
+    let cards = try Faden.FlashcardsCommand.parse(["~/L", "--examples", "e.txt", "--csv", "--model", "sonnet", "--subscription"])
+    #expect(cards.folder == "~/L" && cards.examples == "e.txt" && cards.csv)
+    #expect(cards.options.model == .sonnet && cards.options.subscription)
+    let guide = try Faden.StudyGuideCommand.parse(["~/Course", "--lectures", "a", "b"])
+    #expect(guide.lectures == ["a", "b"] && guide.options.model == .opus)
+    #expect(Faden.StudyGuideCommand.relative(URL(fileURLWithPath: "/c/Block 1/L"), to: URL(fileURLWithPath: "/c")) == "Block 1/L")
+}

@@ -81,6 +81,29 @@ import Testing
             sessionResetsAt: Date(timeIntervalSince1970: 1793189400), weekResetsAt: Date(timeIntervalSince1970: 1793548800)))
     }
 
+    /// Recorded from `claude -p` with `--json-schema`: the CLI answers through its `StructuredOutput` tool, so a
+    /// `user` event with the tool result follows the reply, and the result stops with `tool_use`. That's a
+    /// complete answer, not one the CLI resumed after the output limit.
+    @Test func aStructuredReplyIsNotTakenForATruncation() throws {
+        let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        let stdout = try Data(contentsOf: dir.appending(path: "Fixtures/cli-schema-ok.jsonl"))
+        let result = try ClaudeCLIClient.parse(.init(status: 0, stdout: stdout, stderr: Data()), requestedModel: "x")
+        let json = try #require(try JSONSerialization.jsonObject(with: Data(result.text.utf8)) as? [String: [String]])
+        #expect(json == ["colours": ["Blue", "Red"]])
+        #expect(result.model == "claude-haiku-5-5")
+    }
+
+    @Test func aUserTurnWithTextIsStillAResume() {
+        let lines = [
+            #"{"type":"assistant","message":{"id":"m1","model":"claude-opus-5-5","content":[{"type":"text","text":"part"}]}}"#,
+            #"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Output token limit hit. Resume directly"}]}}"#,
+            Self.success,
+        ].joined(separator: "\n")
+        #expect(throws: AnthropicError.truncated) {
+            try ClaudeCLIClient.parse(.init(status: 0, stdout: Data(lines.utf8), stderr: Data()), requestedModel: "x")
+        }
+    }
+
     private static func limitEvent(session: Double, week: Double, sessionEnd: Double = 1793189400) -> String {
         #"{"type":"rate_limit_event","rate_limit_info":{"unifiedWindows":{"five_hour":{"utilization":\#(session),"resetsAt":\#(sessionEnd)},"seven_day":{"utilization":\#(week),"resetsAt":1793548800}}}}"#
     }

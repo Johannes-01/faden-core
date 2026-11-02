@@ -13,7 +13,8 @@ struct Faden: AsyncParsableCommand {
             ANTHROPIC_API_KEY (or the key the Faden app stored in the Keychain), or with --subscription \
             through the local claude CLI on your Claude subscription.
             """,
-        subcommands: [ProcessCommand.self, RetryCommand.self, StylesCommand.self])
+        subcommands: [ProcessCommand.self, RetryCommand.self, StylesCommand.self, FlashcardsCommand.self,
+                      StudyGuideCommand.self])
 }
 
 /// Options shared by the commands that run the pipeline.
@@ -45,6 +46,20 @@ struct RunOptions: ParsableArguments {
             try store.installDefaultsIfMissing()
             return store
         }
+    }
+}
+
+/// Options of the commands that make something from existing notes.
+struct StudyOptions: ParsableArguments {
+    @Option(help: ArgumentHelp("The model: opus, sonnet (5.5) or sonnet-5.", valueName: "model"))
+    var model: NotesModelOption = .opus
+
+    @Flag(help: "Send the call through the local claude CLI on your Claude subscription instead of an API key.")
+    var subscription = false
+
+    func maker() throws -> StudyMaker {
+        let client = try ClientChoice.make(subscription: subscription, environment: ProcessInfo.processInfo.environment)
+        return StudyMaker(client: client, ledger: CostLedger(), model: model.id)
     }
 }
 
@@ -168,6 +183,97 @@ extension Faden {
             }
             let pipeline = try PipelineRun.make(folder: lecture, options: runOptions, styles: try options.styles)
             try await PipelineRun.follow(pipeline) { await pipeline.retry() }
+        }
+    }
+
+    struct FlashcardsCommand: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "flashcards",
+            abstract: "Make exam-style flashcards from a lecture's notes.",
+            discussion: """
+                One call over the notes (not the transcript) writes flashcards.md into the lecture folder; \
+                --csv also writes flashcards.csv for Anki's text import.
+                """)
+
+        @Argument(help: "The lecture folder.")
+        var folder: String
+
+        @Option(help: "The notes file to use; the newest notes.md by default.")
+        var notes: String?
+
+        @Option(help: "A file of past exam questions whose style the cards should follow.")
+        var examples: String?
+
+        @Flag(help: "Also write flashcards.csv (Front, Back, Tags) for Anki.")
+        var csv = false
+
+        @OptionGroup var options: StudyOptions
+
+        func run() async throws {
+            let url = ProcessCommand.fileURL(folder).standardizedFileURL
+            let lecture = LectureFolder(url: url)
+            guard let entry = Library.lecture(at: url, course: url.deletingLastPathComponent()) else {
+                throw ValidationError("\(url.path) isn't a lecture folder")
+            }
+            guard let notesFile = notes.map(ProcessCommand.fileURL) ?? entry.notes.first else {
+                throw ValidationError("\(url.lastPathComponent) has no notes yet")
+            }
+            let examplesText = try examples.map { try String(contentsOf: ProcessCommand.fileURL($0), encoding: .utf8) }
+            PipelineRun.printErr("Making flashcards from \(notesFile.lastPathComponent)…")
+            let file = try await options.maker().flashcards(for: lecture, notes: notesFile, title: entry.title,
+                                                           examples: examplesText)
+            if csv {
+                let cards = Flashcards.read(try String(contentsOf: file, encoding: .utf8))
+                let target = url.appendingPathComponent("flashcards.csv")
+                try Flashcards.csv(cards, tags: [entry.course.lastPathComponent, entry.title])
+                    .write(to: target, atomically: true, encoding: .utf8)
+                print(target.path)
+            }
+            print(file.path)
+        }
+    }
+
+    struct StudyGuideCommand: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "study-guide",
+            abstract: "Make a study guide for a course from its lectures' notes.",
+            discussion: """
+                One call over the newest notes of the course's lectures (in date order, subfolders included) \
+                writes "Study guide <date>.md" into the course folder.
+                """)
+
+        @Argument(help: "The course folder.")
+        var course: String
+
+        @Option(parsing: .upToNextOption, help: "Only these lecture folders (in the course); all with notes by default.")
+        var lectures: [String] = []
+
+        @OptionGroup var options: StudyOptions
+
+        func run() async throws {
+            let url = ProcessCommand.fileURL(course).standardizedFileURL
+            var chosen = Library.tree(at: url).allLectures.filter { !$0.notes.isEmpty }
+            if !lectures.isEmpty {
+                let wanted = Set(lectures.map { ProcessCommand.fileURL($0).standardizedFileURL.path })
+                chosen = chosen.filter { wanted.contains($0.folder.url.standardizedFileURL.path) }
+            }
+            chosen.sort { a, b in
+                let (da, db) = (a.date ?? .distantPast, b.date ?? .distantPast)
+                return da != db ? da < db : a.title < b.title
+            }
+            guard !chosen.isEmpty else { throw ValidationError("No lectures with notes in \(url.path)") }
+            let inputs = try chosen.map { lecture in
+                StudyGuide.Lecture(title: lecture.title, path: Self.relative(lecture.folder.url, to: url),
+                                   notes: try String(contentsOf: lecture.notes[0], encoding: .utf8))
+            }
+            PipelineRun.printErr("Making a study guide from \(inputs.count) lectures…")
+            print(try await options.maker().studyGuide(for: url, lectures: inputs).path)
+        }
+
+        static func relative(_ folder: URL, to course: URL) -> String {
+            let base = course.standardizedFileURL.path + "/"
+            let path = folder.standardizedFileURL.path
+            return path.hasPrefix(base) ? String(path.dropFirst(base.count)) : folder.lastPathComponent
         }
     }
 
