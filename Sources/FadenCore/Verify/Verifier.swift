@@ -14,13 +14,14 @@ public enum VerifierError: Error, Equatable {
     case missingResource(String)
 }
 
-/// Builds the Haiku request that flags note lines the sources don't support, and applies its findings.
+/// Builds the request (Haiku by default) that flags note lines the sources don't support, and applies its findings.
 public enum Verifier {
     static let flag = " ⚠️ not found in sources"
-    /// The model the check asks for.
+    /// The model the check asks for unless another is chosen.
     public static let model = "claude-haiku-5-5"
 
-    public static func request(notes: String, transcript: Transcript, slides: [URL]) throws -> MessageRequest {
+    public static func request(notes: String, transcript: Transcript, slides: [URL],
+                               model: String = Verifier.model) throws -> MessageRequest {
         // Slides first, then the transcript, then the notes under test. Nothing is cached: the cache is
         // per model, so the notes call's cached slides can't be read here, and a check runs once per lecture.
         // Every slide's text is sent, but figures only for the slides the notes cite and their neighbours.

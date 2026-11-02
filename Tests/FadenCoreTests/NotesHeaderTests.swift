@@ -17,6 +17,15 @@ import Testing
         )
     }
 
+    @Test func aSkippedCheckNamesTheChosenCheckModel() {
+        var h = header()
+        #expect(h.markdown().contains("· check: claude-haiku-5-5\n"))
+        h.checkModel = "claude-sonnet-5-5"
+        #expect(h.markdown().contains("· check: claude-sonnet-5-5\n"))
+        h.verifyCall = PaidCall(model: "claude-opus-5-5", usage: Usage())
+        #expect(h.markdown().contains("· check: claude-opus-5-5\n"))
+    }
+
     @Test func opusCost() {
         let usd = Pricing.usd(model: "claude-opus-5-5", usage: Usage(inputTokens: 152_340, outputTokens: 9_870))
         #expect(String(format: "%.2f", usd ?? -1) == "0.81")

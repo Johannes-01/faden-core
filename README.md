@@ -2,7 +2,7 @@
 
 The open-source core of Faden: it turns a lecture recording, your slide PDFs and your own shorthand notes into study notes with Claude. Every statement in the notes is labelled with its source, so you can see what the lecturer said and what the model added.
 
-Pipeline: transcribe on-device (WhisperKit) → write notes (Claude Opus 5.5, with your slides and notes) → check them against the sources (Claude Haiku 5.5) → `notes.md` in a lecture folder.
+Pipeline: transcribe on-device (WhisperKit) → write notes (Claude Opus 5.5 by default, with your slides and notes) → check them against the sources (Claude Haiku 5.5 by default) → `notes.md` in a lecture folder.
 
 This repository holds the whole pipeline: the recording session handling, transcription, the prompts and note styles, the Anthropic API client, the `claude` CLI client, verification and output. It includes the `faden` command-line tool, so you can run everything end to end without the Faden app. The Faden macOS app is built on top of it.
 
@@ -39,7 +39,7 @@ faden process lecture.m4a --slides 03-sorting.pdf --notes my-notes.md --out ~/Le
 
 This creates `~/Lectures/Algorithms/<date> <title>/`, named after the first slide PDF (or, without slides, after the notes' title), with `notes.md`, `transcript.md`, the copied audio and the run's state in `.faden/`. The path of the notes file is printed on stdout, and progress goes to stderr.
 
-- `faden process <audio…> --out <course folder>`: several audio files are joined in the order given. Options: `--slides <pdf…>`, `--notes <file>` (Markdown, text or PDF), `--style <id or letter>` (default `C`), `--no-additions` (no 💡 lines), `--language de|en` (detected otherwise), `--model fast|accurate` (speech model), `--notes-model opus|sonnet|sonnet-5` (the model that writes the notes; `sonnet` is Sonnet 5.5; default opus, the check always uses Haiku), `--retranscribe`.
+- `faden process <audio…> --out <course folder>`: several audio files are joined in the order given. Options: `--slides <pdf…>`, `--notes <file>` (Markdown, text or PDF), `--style <id or letter>` (default `C`), `--no-additions` (no 💡 lines), `--language de|en` (detected otherwise), `--model fast|accurate` (speech model), `--notes-model opus|sonnet|sonnet-5` (the model that writes the notes; `sonnet` is Sonnet 5.5; default opus), `--check-model haiku|sonnet|opus` (the model that checks them; default haiku), `--retranscribe`. The run's state records both models, so `faden retry` keeps them.
 - `faden retry <lecture folder>`: continues a failed or interrupted run (a network error, Ctrl-C) from the stage where it stopped. Stages that were already paid for are not paid for again.
 - `faden styles`: lists the note styles.
 - `--subscription`: sends the calls through the local `claude` CLI on your Claude subscription instead of the API. For personal use; the notes header then shows how much of the session and weekly limit the run used.

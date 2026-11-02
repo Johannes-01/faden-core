@@ -86,3 +86,12 @@ private let ids = ["A-slide-by-slide", "B-by-topic", "C-red-line", "D-slides-and
     #expect(try RunOptions.parse([]).notesModel == .opus)
     #expect(try RunOptions.parse(["--notes-model", "sonnet"]).notesModel == .sonnet)
 }
+
+@Test func checkModelNamesMeanTheirModelIds() throws {
+    #expect(CheckModelOption.haiku.id == Verifier.model)
+    #expect(CheckModelOption.sonnet.id == "claude-sonnet-5-5")
+    #expect(CheckModelOption.opus.id == NotesPrompt.model)
+    #expect(try RunOptions.parse([]).checkModel == .haiku)
+    #expect(try RunOptions.parse(["--check-model", "opus"]).checkModel == .opus)
+    #expect(throws: (any Error).self) { try RunOptions.parse(["--check-model", "gpt"]) }
+}

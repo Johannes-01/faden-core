@@ -21,9 +21,14 @@ struct RunOptions: ParsableArguments {
     @Option(help: "The speech model: fast (small) or accurate (large, a big first download).")
     var model: ModelOption = .fast
 
-    @Option(help: ArgumentHelp("The model that writes the notes: opus, sonnet (5.5) or sonnet-5. The check always uses Haiku 5.5.",
+    @Option(help: ArgumentHelp("The model that writes the notes: opus, sonnet (5.5) or sonnet-5.",
+                               discussion: "`faden retry` keeps the models the run was started with.",
                                valueName: "model"))
     var notesModel: NotesModelOption = .opus
+
+    @Option(help: ArgumentHelp("The model that checks the notes against the sources: haiku, sonnet (5.5) or opus.",
+                               valueName: "model"))
+    var checkModel: CheckModelOption = .haiku
 
     @Flag(help: "Send the calls through the local claude CLI on your Claude subscription instead of an API key.")
     var subscription = false
@@ -62,6 +67,18 @@ enum NotesModelOption: String, CaseIterable, ExpressibleByArgument {
         case .opus: NotesPrompt.model
         case .sonnet: "claude-sonnet-5-5"
         case .sonnet5: "claude-sonnet-5"
+        }
+    }
+}
+
+enum CheckModelOption: String, CaseIterable, ExpressibleByArgument {
+    case haiku, sonnet, opus
+
+    var id: String {
+        switch self {
+        case .haiku: Verifier.model
+        case .sonnet: "claude-sonnet-5-5"
+        case .opus: NotesPrompt.model
         }
     }
 }
@@ -178,7 +195,8 @@ enum PipelineRun {
     static func make(folder: LectureFolder, options: RunOptions, styles: StyleStore) throws -> Pipeline {
         let client = try ClientChoice.make(subscription: options.subscription, environment: ProcessInfo.processInfo.environment)
         return Pipeline(folder: folder, transcriber: WhisperKitTranscriber(model: options.model.model), client: client,
-                        styles: styles, ledger: CostLedger(), now: { Date() }, notesModel: options.notesModel.id)
+                        styles: styles, ledger: CostLedger(), now: { Date() }, notesModel: options.notesModel.id,
+                        checkModel: options.checkModel.id)
     }
 
     /// Prints each stage as it starts, runs `work`, then prints where the notes went or throws with the error.
