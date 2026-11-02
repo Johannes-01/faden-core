@@ -1,0 +1,53 @@
+name: Release
+
+# Pushing a version tag (e.g. 0.5.0) publishes a GitHub release with that version's CHANGELOG section and the
+# faden CLI. Run it by hand to publish the release of a tag that already exists.
+on:
+  push:
+    tags: ['[0-9]+.[0-9]+.[0-9]+']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The existing version tag to publish, e.g. 0.4.0
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-26
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - name: Release notes
+        run: scripts/release-notes.sh "$TAG" > notes.md
+      - name: Unit tests
+        run: scripts/test.sh
+      - name: Build the CLI
+        run: swift build -c release --arch arm64
+      - name: Package
+        # The CLI finds its prompts and styles in the resource bundle next to the binary.
+        run: |
+          dir="faden-$TAG-macos-arm64"
+          mkdir "$dir"
+          cp .build/arm64-apple-macosx/release/faden "$dir/"
+          cp -R .build/arm64-apple-macosx/release/faden-core_FadenCore.bundle "$dir/"
+          tar -czf "$dir.tar.gz" "$dir"
+          shasum -a 256 "$dir.tar.gz" > "$dir.tar.gz.sha256"
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            cat notes.md
+            echo
+            echo "### The faden CLI"
+            echo
+            echo "\`faden-$TAG-macos-arm64.tar.gz\` holds \`faden\` and its resource bundle; keep the two together. macOS 26 on Apple silicon. The binary is not notarized: after downloading, run \`xattr -d com.apple.quarantine faden\`, or build it yourself with \`swift build -c release\`."
+          } > body.md
+          gh release create "$TAG" --title "$TAG" --notes-file body.md --verify-tag \
+            "faden-$TAG-macos-arm64.tar.gz" "faden-$TAG-macos-arm64.tar.gz.sha256"
