@@ -176,14 +176,24 @@ public struct ClaudeCLIClient: MessageSending {
 
     /// Reads the stream-json events: the model from the last `assistant` event, the limits as `limits(in:)` (0
     /// when missing), everything else from `result`.
+    ///
+    /// With tools off, a call has one assistant reply. When the reply hits the output limit, the CLI asks the
+    /// model to resume on its own (a `user` event, then another reply), and `result` then holds only the last
+    /// reply as a success. More than one reply, or any `user` event, is therefore a truncation.
     static func parse(_ output: Output, requestedModel: String) throws -> MessageResult {
         var result: [String: Any]?
         var model: String?
+        var replyIDs: Set<String> = []
+        var resumed = false
         for line in output.stdout.split(separator: 0x0A) {
             guard let event = (try? JSONSerialization.jsonObject(with: Data(line))) as? [String: Any] else { continue }
             switch event["type"] as? String {
             case "assistant":
-                if let m = (event["message"] as? [String: Any])?["model"] as? String { model = m }
+                let message = event["message"] as? [String: Any]
+                if let m = message?["model"] as? String { model = m }
+                if let id = message?["id"] as? String { replyIDs.insert(id) }
+            case "user":
+                resumed = true
             case "result":
                 result = event
             default:
@@ -197,7 +207,7 @@ public struct ClaudeCLIClient: MessageSending {
         }
         let stop = result["stop_reason"] as? String
         if stop == "refusal" { throw AnthropicError.refused(category: nil) }
-        if stop == "max_tokens" { throw AnthropicError.truncated }
+        if stop == "max_tokens" || resumed || replyIDs.count > 1 { throw AnthropicError.truncated }
         if result["is_error"] as? Bool == true || result["subtype"] as? String != "success" {
             let errors = (result["errors"] as? [String])?.joined(separator: "; ")
             throw ClaudeCLIError.failed(result["result"] as? String ?? errors ?? result["subtype"] as? String ?? "unknown error")

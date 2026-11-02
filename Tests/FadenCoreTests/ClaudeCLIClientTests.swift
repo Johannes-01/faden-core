@@ -223,6 +223,29 @@ import Testing
         }
     }
 
+    /// Recorded from claude 2.1.316 with a 300-token limit: after `max_tokens` the CLI sends "Output token limit
+    /// hit. Resume directly…" on its own and reports only the last assistant message, as a success.
+    @Test func aReplyTheCLIResumedAfterTheOutputLimitIsTruncated() {
+        let out = ClaudeCLIClient.Output(status: 0, stdout: Self.lines([
+            #"{"type":"system","subtype":"init"}"#,
+            ##"{"type":"assistant","message":{"id":"msg_1","model":"claude-haiku-5-5","content":[{"type":"text","text":"# TCP\n\n1. First"}]}}"##,
+            #"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Output token limit hit. Resume directly — no apology, no recap of what you were doing."}]}}"#,
+            #"{"type":"assistant","message":{"id":"msg_2","model":"claude-haiku-5-5","content":[{"type":"text","text":"5. Last part."}]}}"#,
+            ##"{"type":"result","subtype":"success","is_error":false,"stop_reason":"end_turn","num_turns":2,"result":"5. Last part.","usage":{"input_tokens":8,"output_tokens":600}}"##,
+        ]), stderr: Data())
+        #expect(throws: AnthropicError.truncated) { try ClaudeCLIClient.parse(out, requestedModel: "claude-haiku-5-5") }
+    }
+
+    /// One reply can come as several `assistant` events, one per content block, all with the same id.
+    @Test func severalEventsOfOneReplyAreNotATruncation() throws {
+        let out = ClaudeCLIClient.Output(status: 0, stdout: Self.lines([
+            #"{"type":"assistant","message":{"id":"msg_1","model":"claude-haiku-5-5","content":[{"type":"thinking","thinking":""}]}}"#,
+            ##"{"type":"assistant","message":{"id":"msg_1","model":"claude-haiku-5-5","content":[{"type":"text","text":"# Notes"}]}}"##,
+            ##"{"type":"result","subtype":"success","is_error":false,"stop_reason":"end_turn","num_turns":1,"result":"# Notes","usage":{"input_tokens":8,"output_tokens":600}}"##,
+        ]), stderr: Data())
+        #expect(try ClaudeCLIClient.parse(out, requestedModel: "claude-haiku-5-5").text == "# Notes")
+    }
+
     @Test func missingExecutableFails() async {
         await #expect(throws: ClaudeCLIError.notFound) {
             _ = try await ClaudeCLIClient(executable: nil).send(Self.notesRequest())
