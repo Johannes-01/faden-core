@@ -104,7 +104,7 @@ Audio never leaves the Mac: transcription runs on-device. Only the transcript te
 Add the package and depend on the `FadenCore` and `FadenTranscription` products:
 
 ```swift
-.package(url: "https://github.com/Johannes-01/faden-core", .upToNextMinor(from: "0.5.0")),
+.package(url: "https://github.com/Johannes-01/faden-core", .upToNextMinor(from: "0.6.0")),
 ```
 
 `FadenCore` has no UI code; it uses Foundation, AVFAudio, PDFKit, Security and Accelerate. Load prompts and styles through `FadenCore.resources`, not `Bundle.module`: an app that bundles FadenCore copies `faden-core_FadenCore.bundle` into its `Contents/Resources`, and `FadenCore.resources` looks there first. The public API is the contract with the app and follows semantic versioning; see [CHANGELOG.md](CHANGELOG.md). Until 1.0, a minor version may break it.
