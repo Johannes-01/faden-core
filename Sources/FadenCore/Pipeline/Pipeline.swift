@@ -273,7 +273,7 @@ public actor Pipeline {
         try createFadenDirectory()
         try Data(result.text.utf8).write(to: draftURL(Self.draftName), options: .atomic)
         s.draftNotesFile = Self.draftName
-        s.styleName = Self.shortName(style)
+        s.styleName = Self.headerName(style)
         s.slideImages = style.slideImages
         let call = PaidCall(model: result.model, usage: result.usage, subscription: result.subscription,
                             subscriptionBefore: result.subscriptionBefore)
@@ -329,7 +329,7 @@ public actor Pipeline {
         let findings = s.findings ?? []
         let merged = Verifier.merge(findings, into: draft)
         // States saved before `styleName` existed resolve the style file instead.
-        let styleName = try s.styleName ?? Self.shortName(styles.resolve(id: s.styleID, hasSlides: !s.slides.isEmpty))
+        let styleName = try s.styleName ?? Self.headerName(styles.resolve(id: s.styleID, hasSlides: !s.slides.isEmpty))
 
         let header = NotesHeader(
             date: now(), style: styleName, slides: s.slides.map(\.lastPathComponent),
@@ -414,9 +414,13 @@ public actor Pipeline {
         log.info("\(name, privacy: .public) call answered by \(result.model, privacy: .public), stop \(result.stopReason, privacy: .public), tokens in \(u.inputTokens) out \(u.outputTokens) cache write \(u.cacheCreationInputTokens) read \(u.cacheReadInputTokens)")
     }
 
-    /// `C` for the bundled `C · Red line first, then detail`; a custom style's full name otherwise.
-    static func shortName(_ style: NoteStyle) -> String {
-        style.name.components(separatedBy: " · ").first ?? style.name
+    /// `C (Red line first, then detail)` for the bundled `C · Red line first, then detail`, so the header names
+    /// the style and not just its letter; a name without ` · ` as it is. The header separates its parts with
+    /// ` · `, so none is left in the result.
+    static func headerName(_ style: NoteStyle) -> String {
+        let parts = style.name.components(separatedBy: " · ").map { $0.trimmingCharacters(in: .whitespaces) }
+        guard parts.count > 1, let letter = parts.first else { return style.name }
+        return "\(letter) (\(parts.dropFirst().joined(separator: ", ")))"
     }
 
     /// The text of a leading `# Title` line.
