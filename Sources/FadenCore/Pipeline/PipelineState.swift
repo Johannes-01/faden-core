@@ -67,7 +67,7 @@ public struct PipelineState: Codable, Equatable, Sendable {
     public var slides: [URL]
     public var userNotes: URL?
     public var styleID: String
-    /// The style's short display name for the notes header, recorded at the notes stage so saving
+    /// The style's name for the notes header, e.g. `C (Red line first, then detail)`, recorded at the notes stage so saving
     /// doesn't depend on the style file still being there.
     public var styleName: String?
     /// Recorded at the notes stage from the style's `slide_images`, so saving puts in the slide images even if
