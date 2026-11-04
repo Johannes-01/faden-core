@@ -4,6 +4,8 @@ The `public` API of `FadenCore` and `FadenTranscription` is the contract with th
 
 ## Unreleased
 
+## 0.6.1 - 2026-11-03
+
 - The notes header names the style along with its letter: `· style C (Red line first, then detail) ·` instead of `· style C ·`. A name without ` · ` stays as it is (e.g. a custom `Exam prep`); any other ` · ` in a style's name becomes `, `, since ` · ` separates the header's parts. `PipelineState.styleName` holds this form for runs whose notes stage ran on this version; states saved before keep the letter.
 
 ## 0.6.0 - 2026-11-02
