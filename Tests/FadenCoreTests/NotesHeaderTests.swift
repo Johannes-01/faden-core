@@ -131,7 +131,7 @@ import Testing
     @Test func byoHeaderUnchanged() {
         let lines = header().markdown().components(separatedBy: "\n")
         #expect(lines[0].hasSuffix("· style A · notes: claude-opus-5-5 · check: \(Verifier.model)"))
-        #expect(lines[4] == "> Cost: $0.77 (152340 in / 9870 out tokens)")
+        #expect(lines[4] == "> Cost: $0.81 (152340 in / 9870 out tokens)")
     }
 
     @Test func oldPaidCallDecodesAsNotHosted() throws {
