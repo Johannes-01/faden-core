@@ -4,6 +4,12 @@ The `public` API of `FadenCore` and `FadenTranscription` is the contract with th
 
 ## Unreleased
 
+## 0.7.0 - 2026-11-04
+
+- Every request carries its step as a `RequestTag` (`MessageRequest.tag`), which is not encoded into the request. `HostedRequest.make(tag:messages:model:)` rebuilds a request from a tag and its messages, for a hosted backend; a `.notes` tag without its `stylePrompt` or `allowAdditions` throws `HostedRequestError.incompleteTag`.
+- Hosted billing: a hosted call is ledgered as `CostRecord.Billing.hosted`, and the notes, flashcards and study-guide headers of a hosted call name neither its cost nor its models (the `Cost` line and the `notes:` / `check:` parts are left out). An exhaustive `switch` over `CostRecord.Billing` needs the new case.
+- A paid-call gate (`PaidCallGate`, `admit(_:state:reservation:)`): the pipeline and the study tools ask it right before each paid call. It returns the reservation the call goes out under, or throws to stop the run before anything is paid. The reservation is kept in the lecture state (`PipelineState.reservationID`), so a retry reuses it instead of reserving again; `PipelineState.carryingPaidDraft(from:)` carries it along with the paid draft, so a Process again that only redoes the check reserves nothing new. `Pipeline.init(…, gate:)` and `StudyMaker` take the gate as `gate:`, nil by default.
+
 ## 0.6.1 - 2026-11-03
 
 - The notes header names the style along with its letter: `· style C (Red line first, then detail) ·` instead of `· style C ·`. A name without ` · ` stays as it is (e.g. a custom `Exam prep`); any other ` · ` in a style's name becomes `, `, since ` · ` separates the header's parts. `PipelineState.styleName` holds this form for runs whose notes stage ran on this version; states saved before keep the letter.

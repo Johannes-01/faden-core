@@ -50,4 +50,11 @@ import Testing
         #expect(QuitPolicy.action(hasUnfinishedRecording: false, isFinishing: true, isProcessing: false) == .waitForSave)
         #expect(QuitPolicy.action(hasUnfinishedRecording: false, isFinishing: false, isProcessing: true) == .confirmStopRun)
     }
+
+    @Test func hostedRunHasNoSummary() {
+        let hosted = PaidCall(model: "claude-sonnet-5-5", usage: Usage(inputTokens: 10, outputTokens: 5), hosted: true)
+        #expect(RunCost.summary(state(notes: hosted)) == nil)
+        #expect(RunCost.summary(state(notes: hosted, verify: haiku)) == nil)
+        #expect(RunCost.summary(state(notes: opus)) != nil)
+    }
 }

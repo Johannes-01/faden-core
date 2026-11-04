@@ -28,14 +28,21 @@ public struct PaidCall: Codable, Equatable, Sendable {
     /// The limits' use right before the call; nil when it couldn't be read, and in states saved before Faden
     /// recorded it.
     public var subscriptionBefore: SubscriptionLimits?
+    /// Set when the call ran on the hosted backend: its header names neither cost nor models. nil in states
+    /// saved before the hosted mode, and for any other call, so their JSON stays as it was.
+    public var hosted: Bool?
 
     public init(model: String, usage: Usage, subscription: SubscriptionLimits? = nil,
-                subscriptionBefore: SubscriptionLimits? = nil) {
+                subscriptionBefore: SubscriptionLimits? = nil, hosted: Bool = false) {
+        self.hosted = hosted ? true : nil
         self.model = model
         self.usage = usage
         self.subscription = subscription
         self.subscriptionBefore = subscriptionBefore
     }
+
+    /// Whether the call ran on the hosted backend.
+    public var isHosted: Bool { hosted == true }
 
     /// The call's price in USD, or nil when the model has no known price. Subscription calls cost nothing.
     public var usd: Double? { subscription != nil ? 0 : Pricing.usd(model: model, usage: usage) }
@@ -98,6 +105,9 @@ public struct PipelineState: Codable, Equatable, Sendable {
     public var findings: [Finding]?
     /// Set when verification was skipped, e.g. `skipped (HTTP 500)`.
     public var verificationSkipped: String?
+    /// The reservation the paid calls go out under, kept so a retry hands it back to the paid-call gate and
+    /// never reserves twice. nil without a gate and in older files.
+    public var reservationID: String?
 
     public init(
         stage: Stage = .transcribing,
@@ -167,7 +177,9 @@ extension PipelineState {
     /// This fresh state with `previous`'s paid draft and check carried over, when `previous` is an unfinished
     /// run that made them from the same audio, slides, notes file, style, 💡 setting, language and notes
     /// model, and no re-transcription is asked for. `Pipeline.run` then resumes from the draft instead of
-    /// paying for the notes again (it also checks the draft file and the speech model). The check is carried
+    /// paying for the notes again (it also checks the draft file and the speech model). The reservation the
+    /// paid notes went out under is carried with them, so a hosted check that runs again reuses it instead of
+    /// reserving again. The check is carried
     /// over only when it was asked of the same check model; otherwise only the check runs again. A finished
     /// lecture is never carried over: processing it again writes fresh notes (ruling R35). Otherwise the state
     /// is returned unchanged. A nil model counts as the default (`NotesPrompt.model`, `Verifier.model`).
@@ -185,6 +197,7 @@ extension PipelineState {
         s.styleName = previous.styleName
         s.slideImages = previous.slideImages
         s.notesCall = previous.notesCall
+        s.reservationID = previous.reservationID
         guard (previous.checkModel ?? Verifier.model) == (checkModel ?? Verifier.model) else { return s }
         s.checkModel = previous.checkModel ?? checkModel
         s.verifyCall = previous.verifyCall

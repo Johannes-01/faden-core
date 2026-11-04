@@ -517,6 +517,23 @@ actor FakeClient: MessageSending {
         #expect(carried.verifyCall != nil)
     }
 
+    @Test func aCarriedDraftKeepsItsReservation() {
+        var previous = PipelineState(stage: .failed, audio: [URL(filePath: "/a.m4a")], styleID: "C", allowAdditions: true)
+        previous.draftNotesFile = "draft-notes.md"
+        previous.notesCall = PaidCall(model: NotesPrompt.model, usage: Usage())
+        previous.reservationID = "r-1"
+        let fresh = PipelineState(audio: [URL(filePath: "/a.m4a")], styleID: "C", allowAdditions: true,
+                                  checkModel: "claude-sonnet-5-5")
+        let carried = fresh.carryingPaidDraft(from: previous)
+        #expect(carried.notesCall != nil)
+        #expect(carried.verifyCall == nil)
+        #expect(carried.reservationID == "r-1")
+
+        let notCarried = PipelineState(audio: [URL(filePath: "/b.m4a")], styleID: "C", allowAdditions: true)
+            .carryingPaidDraft(from: previous)
+        #expect(notCarried.reservationID == nil)
+    }
+
     @Test func processAgainPaysWhenTheDraftCantBeReused() async throws {
         let env = try makeEnv()
         defer { env.cleanup() }

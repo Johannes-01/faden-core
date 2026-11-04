@@ -11,6 +11,9 @@ extension PipelineState {
     /// What the run used of the subscription's limits; nil as for `LimitUse.total(of:)`.
     public var limitUse: LimitUse? { LimitUse.total(of: calls) }
 
+    /// Whether any of the run's calls ran on the hosted backend, which shows no cost.
+    public var ranHosted: Bool { calls.contains(where: \.isHosted) }
+
     private var calls: [PaidCall] { [notesCall, verifyCall].compactMap { $0 } }
 
     private func sum(_ price: KeyPath<PaidCall, Double?>) -> Double? {
@@ -33,6 +36,7 @@ public enum RunCost {
     /// subscription (just the tokens when its limit use is unknown), else its cost, e.g. "$0.84". nil when
     /// the price is unknown.
     public static func summary(_ state: PipelineState) -> String? {
+        guard !state.ranHosted else { return nil }
         guard state.ranOnSubscription else { return text(state.costUSD) }
         var tokens = 0
         for u in [state.notesCall, state.verifyCall].compactMap({ $0?.usage }) {
@@ -45,7 +49,7 @@ public enum RunCost {
     /// The cost text of the lecture's saved state, e.g. "$0.84", or "session +4% · week <1%" for a run on the
     /// subscription; nil if unreadable, unpriced or of unknown limit use.
     public static func text(for folder: LectureFolder) -> String? {
-        PipelineState.saved(in: folder).flatMap { $0.ranOnSubscription ? $0.limitUse?.text : text($0.costUSD) }
+        PipelineState.saved(in: folder).flatMap { $0.ranHosted ? nil : $0.ranOnSubscription ? $0.limitUse?.text : text($0.costUSD) }
     }
 }
 

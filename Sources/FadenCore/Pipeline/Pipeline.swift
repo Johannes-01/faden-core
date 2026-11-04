@@ -36,6 +36,8 @@ public actor Pipeline {
     /// The models for a state that names none (`PipelineState.notesModel`, `checkModel`).
     private let notesModel: String
     private let checkModel: String
+    /// Asked right before each paid call; nil when nothing gates them.
+    private let gate: PaidCallGate?
     /// True while `run` or `retry` is working; a second call meanwhile returns `current` unchanged.
     private var isRunning = false
     /// The state of the run in progress, or of the last one.
@@ -50,7 +52,7 @@ public actor Pipeline {
     public init(folder: LectureFolder, transcriber: Transcriber, client: MessageSending, styles: StyleStore,
                 ledger: CostLedger, now: @escaping @Sendable () -> Date,
                 duration: @escaping DurationLoader = Pipeline.audioDuration, notesModel: String = NotesPrompt.model,
-                checkModel: String = Verifier.model) {
+                checkModel: String = Verifier.model, gate: PaidCallGate? = nil) {
         self.folder = folder
         self.transcriber = transcriber
         self.client = client
@@ -60,6 +62,7 @@ public actor Pipeline {
         self.duration = duration
         self.notesModel = notesModel
         self.checkModel = checkModel
+        self.gate = gate
         (progress, continuation) = AsyncStream.makeStream(of: Stage.self)
     }
 
@@ -169,6 +172,8 @@ public actor Pipeline {
             } catch {
                 s.stage = .failed
                 s.failedStage = stage
+                // A reservation made inside the failed stage was checkpointed there; keep it for the retry.
+                s.reservationID = current?.reservationID ?? s.reservationID
                 // A cancelled request can surface as another error, e.g. a cut-off stream.
                 s.error = Task.isCancelled ? Self.cancelledMessage : Self.message(for: error)
                 if Task.isCancelled {
@@ -264,9 +269,15 @@ public actor Pipeline {
     private func writeNotes(_ state: PipelineState) async throws -> PipelineState {
         var s = state
         let style = try styles.resolve(id: s.styleID, hasSlides: !s.slides.isEmpty)
-        let request = try NotesPrompt.request(NotesInputs(
+        var request = try NotesPrompt.request(NotesInputs(
             transcript: try loadTranscript(), slides: s.slides, userNotes: s.userNotes, style: style,
             allowAdditions: s.allowAdditions, languageOverride: s.language, model: s.notesModel ?? notesModel))
+        if let gate {
+            // Saved before the request goes out, so a retry hands the same reservation back to the gate.
+            s.reservationID = try await gate.admit(.notes, state: s, reservation: s.reservationID)
+            try checkpoint(s)
+            request.tag?.reservationID = s.reservationID
+        }
         let result = try await client.send(request)
         Self.logCall("Notes", result)
 
@@ -276,7 +287,7 @@ public actor Pipeline {
         s.styleName = Self.headerName(style)
         s.slideImages = style.slideImages
         let call = PaidCall(model: result.model, usage: result.usage, subscription: result.subscription,
-                            subscriptionBefore: result.subscriptionBefore)
+                            subscriptionBefore: result.subscriptionBefore, hosted: result.hosted)
         s.notesCall = call
         record(call, step: .notes)
         s.stage = .verifying
@@ -292,12 +303,7 @@ public actor Pipeline {
         s.verifyCall = nil
         s.findings = nil
         s.verificationSkipped = nil
-        let result: MessageResult
-        do {
-            let request = try Verifier.request(notes: notes, transcript: try loadTranscript(), slides: s.slides,
-                                               model: s.checkModel ?? checkModel)
-            result = try await client.send(request)
-        } catch {
+        func skip(_ error: Error) throws -> PipelineState {
             // Cancelling stops the run here; only real failures of the check are skipped.
             if error is CancellationError || Task.isCancelled { throw CancellationError() }
             Self.log.error("Check skipped: \(error, privacy: .public)")
@@ -305,9 +311,24 @@ public actor Pipeline {
             s.stage = .saving
             return s
         }
+        var request: MessageRequest
+        do {
+            request = try Verifier.request(notes: notes, transcript: try loadTranscript(), slides: s.slides,
+                                           model: s.checkModel ?? checkModel)
+        } catch { return try skip(error) }
+        // Outside the do/catch below: a refusal by the gate fails the run instead of skipping the check.
+        if let gate {
+            s.reservationID = try await gate.admit(.verify, state: s, reservation: s.reservationID)
+            try checkpoint(s)
+            request.tag?.reservationID = s.reservationID
+        }
+        let result: MessageResult
+        do {
+            result = try await client.send(request)
+        } catch { return try skip(error) }
         Self.logCall("Check", result)
         let call = PaidCall(model: result.model, usage: result.usage, subscription: result.subscription,
-                            subscriptionBefore: result.subscriptionBefore)
+                            subscriptionBefore: result.subscriptionBefore, hosted: result.hosted)
         s.verifyCall = call
         record(call, step: .verify)
         do {

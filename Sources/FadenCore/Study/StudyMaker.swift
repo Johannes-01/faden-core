@@ -7,15 +7,17 @@ public struct StudyMaker: Sendable {
     let ledger: CostLedger
     let now: @Sendable () -> Date
     let model: String
+    let gate: PaidCallGate?
 
     private static let log = Logger(subsystem: FadenCore.identifier, category: "Study")
 
     public init(client: MessageSending, ledger: CostLedger, model: String = NotesPrompt.model,
-                now: @escaping @Sendable () -> Date = { Date() }) {
+                now: @escaping @Sendable () -> Date = { Date() }, gate: PaidCallGate? = nil) {
         self.client = client
         self.ledger = ledger
         self.model = model
         self.now = now
+        self.gate = gate
     }
 
     /// Writes `flashcards.md` into `lecture` from `notes` (replacing an earlier one) and returns its URL.
@@ -23,7 +25,9 @@ public struct StudyMaker: Sendable {
     public func flashcards(for lecture: LectureFolder, notes: URL, title: String, examples: String? = nil)
         async throws -> URL {
         let text = try String(contentsOf: notes, encoding: .utf8)
-        let result = try await client.send(try Flashcards.request(notes: text, examples: examples, model: model))
+        var request = try Flashcards.request(notes: text, examples: examples, model: model)
+        if let gate { request.tag?.reservationID = try await gate.admit(.flashcards, state: nil, reservation: nil) }
+        let result = try await client.send(request)
         let call = record(result, step: .flashcards, name: lecture.url.lastPathComponent)
         let cards = try Flashcards.parse(result.text)
         Self.log.info("\(cards.count) flashcards for \(lecture.url.lastPathComponent, privacy: .public)")
@@ -35,7 +39,9 @@ public struct StudyMaker: Sendable {
 
     /// Writes a new `Study guide <date>.md` into `course` from `lectures` and returns its URL.
     public func studyGuide(for course: URL, lectures: [StudyGuide.Lecture]) async throws -> URL {
-        let result = try await client.send(try StudyGuide.request(lectures, model: model))
+        var request = try StudyGuide.request(lectures, model: model)
+        if let gate { request.tag?.reservationID = try await gate.admit(.studyGuide, state: nil, reservation: nil) }
+        let result = try await client.send(request)
         if result.stopReason == "max_tokens" { throw AnthropicError.truncated }
         let call = record(result, step: .studyGuide, name: course.lastPathComponent)
         let target = StudyGuide.fileURL(in: course, date: now())
@@ -48,7 +54,7 @@ public struct StudyMaker: Sendable {
     /// Cost tracking is best effort: a ledger that can't be written must not lose a paid result.
     private func record(_ result: MessageResult, step: CostRecord.Step, name: String) -> PaidCall {
         let call = PaidCall(model: result.model, usage: result.usage, subscription: result.subscription,
-                            subscriptionBefore: result.subscriptionBefore)
+                            subscriptionBefore: result.subscriptionBefore, hosted: result.hosted)
         do {
             try ledger.append(CostRecord(date: now(), lecture: name, step: step, call: call))
         } catch {

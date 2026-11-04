@@ -117,4 +117,30 @@ import Testing
         let notes = header(notesModel: "other-model").markdown()
         #expect(notes.contains("> Cost: — (price unknown for other-model) (152340 in / 9870 out tokens)"))
     }
+
+    @Test func hostedHeaderHasNoCostAndNoModels() {
+        let call = PaidCall(model: "claude-sonnet-5-5", usage: Usage(inputTokens: 1000, outputTokens: 500), hosted: true)
+        let md = NotesHeader(date: .now, style: "C", slides: [], audio: ["a.m4a"], userNotes: nil,
+                             notesCall: call, verifyCall: call, verification: "ok").markdown()
+        #expect(md.contains("· style C"))
+        #expect(!md.contains("claude-"))
+        #expect(!md.contains("> Cost:"))
+        #expect(!md.contains("tokens"))
+    }
+
+    @Test func byoHeaderUnchanged() {
+        let lines = header().markdown().components(separatedBy: "\n")
+        #expect(lines[0].hasSuffix("· style A · notes: claude-opus-5-5 · check: \(Verifier.model)"))
+        #expect(lines[4] == "> Cost: $0.81 (152340 in / 9870 out tokens)")
+    }
+
+    @Test func oldPaidCallDecodesAsNotHosted() throws {
+        let json = #"{"model":"claude-opus-5-5","usage":{"inputTokens":152340,"outputTokens":9870,"cacheReadInputTokens":0,"cacheCreationInputTokens":0}}"#
+        let call = try JSONDecoder().decode(PaidCall.self, from: Data(json.utf8))
+        #expect(call.hosted == nil)
+        #expect(!call.isHosted)
+        let encoded = String(decoding: try JSONEncoder().encode(PaidCall(model: "m", usage: Usage())), as: UTF8.self)
+        #expect(!encoded.contains("hosted"))
+        #expect(header().markdown().contains("> Cost: "))
+    }
 }

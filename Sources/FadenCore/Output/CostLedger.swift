@@ -47,7 +47,7 @@ public struct CostRecord: Codable, Sendable {
 
     /// How a call was paid for.
     public enum Billing: String, Codable, Sendable {
-        case api, subscription
+        case api, subscription, hosted
     }
 
     public var date: Date
@@ -84,7 +84,7 @@ public struct CostRecord: Codable, Sendable {
     public init(date: Date, lecture: String, step: Step, call: PaidCall) {
         self.init(
             date: date, lecture: lecture, step: step, provider: Pricing.provider(model: call.model), model: call.model,
-            billing: call.subscription == nil ? .api : .subscription, usage: call.usage, usd: call.usd,
+            billing: call.isHosted ? .hosted : call.subscription == nil ? .api : .subscription, usage: call.usage, usd: call.usd,
             apiUSD: Pricing.usd(model: call.model, usage: call.usage), limitUse: call.limitUse)
     }
 }

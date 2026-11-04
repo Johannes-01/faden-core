@@ -103,9 +103,13 @@ public struct MessageResult: Sendable {
     public var subscription: SubscriptionLimits?
     /// The limits' use before the call, when it could be read; see `ClaudeCLIClient.send`.
     public var subscriptionBefore: SubscriptionLimits?
+    /// Set when the call ran on Faden's hosted backend, which bills by plan, not by tokens.
+    public var hosted: Bool
 
     public init(text: String, model: String, stopReason: String, usage: Usage,
-                subscription: SubscriptionLimits? = nil, subscriptionBefore: SubscriptionLimits? = nil) {
+                subscription: SubscriptionLimits? = nil, subscriptionBefore: SubscriptionLimits? = nil,
+                hosted: Bool = false) {
+        self.hosted = hosted
         self.text = text
         self.model = model
         self.stopReason = stopReason

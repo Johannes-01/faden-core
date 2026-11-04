@@ -31,14 +31,20 @@ public enum Verifier {
         content.append(.text(transcript.markdown(), cache: false))
         content.append(.text("Notes to check:\n\n" + notes, cache: false))
 
-        return MessageRequest(
+        return try template(model: model, messages: [Message(content: content)])
+    }
+
+    /// Everything but the content; shared with the hosted mode (`HostedRequest`).
+    static func template(model: String, messages: [Message]) throws -> MessageRequest {
+        MessageRequest(
             model: model,
             maxTokens: 16000,
             stream: false,
             system: [.text(try systemPrompt(), cache: false)],
-            messages: [Message(content: content)],
+            messages: messages,
             // Low effort: matching lines against cited sources is a lookup, and thinking was most of the output.
-            outputConfig: OutputConfig(effort: "low", format: JSONSchemaFormat(schema: schema)))
+            outputConfig: OutputConfig(effort: "low", format: JSONSchemaFormat(schema: schema)),
+            tag: RequestTag(step: .verify))
     }
 
     /// A range wider than this (e.g. a summary citing `Folie 3–30`) adds only its two ends.
