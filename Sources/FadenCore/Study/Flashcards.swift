@@ -42,13 +42,19 @@ public enum Flashcards {
                                  + examples, cache: false))
         }
         content.append(.text("The lecture notes:\n\n" + body, cache: false))
-        return MessageRequest(
+        return try template(model: model, messages: [Message(content: content)])
+    }
+
+    /// Everything but the content; shared with the hosted mode (`HostedRequest`).
+    static func template(model: String, messages: [Message]) throws -> MessageRequest {
+        MessageRequest(
             model: model,
             maxTokens: 16000,
             stream: false,
             system: [.text(try StudyText.prompt("flashcards-system"), cache: false)],
-            messages: [Message(content: content)],
-            outputConfig: OutputConfig(effort: "medium", format: JSONSchemaFormat(schema: schema)))
+            messages: messages,
+            outputConfig: OutputConfig(effort: "medium", format: JSONSchemaFormat(schema: schema)),
+            tag: RequestTag(step: .flashcards))
     }
 
     public static func parse(_ text: String) throws -> [Flashcard] {

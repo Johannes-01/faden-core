@@ -98,6 +98,8 @@ public struct MessageRequest: Encodable, Sendable {
     public var fallbacks: String?
     /// Sent as the `anthropic-beta` header; never part of the body.
     public var betaHeaders: [String]
+    /// Which step made this request and the inputs the hosted mode needs to rebuild it; never part of the body.
+    public var tag: RequestTag?
 
     public init(
         model: String,
@@ -107,7 +109,8 @@ public struct MessageRequest: Encodable, Sendable {
         messages: [Message],
         outputConfig: OutputConfig? = nil,
         fallbacks: String? = nil,
-        betaHeaders: [String] = []
+        betaHeaders: [String] = [],
+        tag: RequestTag? = nil
     ) {
         self.model = model
         self.maxTokens = maxTokens
@@ -117,6 +120,7 @@ public struct MessageRequest: Encodable, Sendable {
         self.outputConfig = outputConfig
         self.fallbacks = fallbacks
         self.betaHeaders = betaHeaders
+        self.tag = tag
     }
 
     private enum CodingKeys: String, CodingKey {

@@ -36,13 +36,19 @@ public enum StudyGuide {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
         }.joined(separator: "\n\n")
         guard text.count <= maxCharacters else { throw StudyGuideError.tooLarge(text.count) }
-        return MessageRequest(
+        return try template(model: model, messages: [Message(content: [.text(text, cache: false)])])
+    }
+
+    /// Everything but the content; shared with the hosted mode (`HostedRequest`).
+    static func template(model: String, messages: [Message]) throws -> MessageRequest {
+        MessageRequest(
             model: model,
             maxTokens: 32000,
             stream: true,
             system: [.text(try StudyText.prompt("study-guide-system"), cache: false)],
-            messages: [Message(content: [.text(text, cache: false)])],
-            outputConfig: OutputConfig(effort: "high"))
+            messages: messages,
+            outputConfig: OutputConfig(effort: "high"),
+            tag: RequestTag(step: .studyGuide))
     }
 
     /// The model's guide with its `lecture:L<n>#<heading>` links pointing at the lectures' notes

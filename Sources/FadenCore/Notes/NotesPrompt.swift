@@ -33,14 +33,6 @@ public enum NotesPrompt {
     public static let model = "claude-opus-5-5"
 
     public static func request(_ i: NotesInputs) throws -> MessageRequest {
-        var system = try baseSystemPrompt() + "\n\n## Style\n" + i.style.prompt
-        if !i.allowAdditions {
-            system += "\n\n" + noAdditionsRule
-        }
-        if let code = i.languageOverride, !code.isEmpty {
-            system += "\n\n" + languageInstruction(code)
-        }
-
         // Stable, cacheable PDFs first; the transcript changes with every recording. Notes that are a PDF
         // (e.g. handwritten) go like slides: page text plus images of the figures.
         let notesPDF = i.userNotes.flatMap { SlideInput.isPDF($0) ? $0 : nil }
@@ -50,15 +42,32 @@ public enum NotesPrompt {
         }
         content.append(.text(i.transcript.markdown(), cache: false))
 
+        return try template(stylePrompt: i.style.prompt, allowAdditions: i.allowAdditions,
+                            languageOverride: i.languageOverride, model: i.model, messages: [Message(content: content)])
+    }
+
+    /// Everything but the content: the system prompt, limits and fallbacks. The builder and the hosted mode
+    /// (`HostedRequest`) both come through here, so they cannot drift.
+    static func template(stylePrompt: String, allowAdditions: Bool, languageOverride: String?, model: String,
+                         messages: [Message]) throws -> MessageRequest {
+        var system = try baseSystemPrompt() + "\n\n## Style\n" + stylePrompt
+        if !allowAdditions {
+            system += "\n\n" + noAdditionsRule
+        }
+        if let code = languageOverride, !code.isEmpty {
+            system += "\n\n" + languageInstruction(code)
+        }
         return MessageRequest(
-            model: i.model,
+            model: model,
             maxTokens: 64000,
             stream: true,
             system: [.text(system, cache: false)],
-            messages: [Message(content: content)],
+            messages: messages,
             outputConfig: OutputConfig(effort: "high"),
             fallbacks: "default",
-            betaHeaders: ["server-side-fallback-2026-07-01"])
+            betaHeaders: ["server-side-fallback-2026-07-01"],
+            tag: RequestTag(step: .notes, stylePrompt: stylePrompt, allowAdditions: allowAdditions,
+                            languageOverride: languageOverride))
     }
 
     /// Appended when additions are off. It comes after the style, so it overrides style rules that ask for 💡.
