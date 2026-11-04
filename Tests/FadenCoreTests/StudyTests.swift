@@ -156,4 +156,23 @@ private func texts(_ r: MessageRequest) throws -> [String] {
         }
         #expect(try FileManager.default.contentsOfDirectory(atPath: dir.path).filter { $0.hasPrefix("Study guide") }.isEmpty)
     }
+
+@Suite struct HostedStudyHeaderTests {
+    private let hosted = PaidCall(model: "claude-sonnet-5-5", usage: Usage(inputTokens: 1000, outputTokens: 500), hosted: true)
+
+    @Test func hostedFlashcardsAndGuideHeadersHaveNoCost() throws {
+        let day = Date(timeIntervalSince1970: 1_762_000_000)
+        let cards = try Flashcards.parse(#"{"cards":[{"question":"Q?","answer":"A","source":"🗣 [00:01:00]"}]}"#)
+        let file = Flashcards.markdown(cards, title: "Raft", notesFile: "notes.md", call: hosted, date: day)
+        #expect(!file.contains("model:"))
+        #expect(!file.contains("> Cost:"))
+        #expect(file.contains("flashcards from notes.md\n"))
+        #expect(Flashcards.read(file).count == 1)
+        let guide = StudyGuide.markdown("# Guide\n\nText", lectures: [StudyGuide.Lecture(title: "Raft", path: "Raft", notes: "# Raft")],
+                                        call: hosted, date: day)
+        #expect(!guide.contains("model:"))
+        #expect(!guide.contains("> Cost:"))
+        #expect(guide.contains("> Lectures:"))
+    }
+}
 }

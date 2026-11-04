@@ -28,14 +28,21 @@ public struct PaidCall: Codable, Equatable, Sendable {
     /// The limits' use right before the call; nil when it couldn't be read, and in states saved before Faden
     /// recorded it.
     public var subscriptionBefore: SubscriptionLimits?
+    /// Set when the call ran on the hosted backend: its header names neither cost nor models. nil in states
+    /// saved before the hosted mode, and for any other call, so their JSON stays as it was.
+    public var hosted: Bool?
 
     public init(model: String, usage: Usage, subscription: SubscriptionLimits? = nil,
-                subscriptionBefore: SubscriptionLimits? = nil) {
+                subscriptionBefore: SubscriptionLimits? = nil, hosted: Bool = false) {
+        self.hosted = hosted ? true : nil
         self.model = model
         self.usage = usage
         self.subscription = subscription
         self.subscriptionBefore = subscriptionBefore
     }
+
+    /// Whether the call ran on the hosted backend.
+    public var isHosted: Bool { hosted == true }
 
     /// The call's price in USD, or nil when the model has no known price. Subscription calls cost nothing.
     public var usd: Double? { subscription != nil ? 0 : Pricing.usd(model: model, usage: usage) }

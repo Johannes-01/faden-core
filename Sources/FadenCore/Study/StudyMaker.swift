@@ -48,7 +48,7 @@ public struct StudyMaker: Sendable {
     /// Cost tracking is best effort: a ledger that can't be written must not lose a paid result.
     private func record(_ result: MessageResult, step: CostRecord.Step, name: String) -> PaidCall {
         let call = PaidCall(model: result.model, usage: result.usage, subscription: result.subscription,
-                            subscriptionBefore: result.subscriptionBefore)
+                            subscriptionBefore: result.subscriptionBefore, hosted: result.hosted)
         do {
             try ledger.append(CostRecord(date: now(), lecture: name, step: step, call: call))
         } catch {

@@ -276,7 +276,7 @@ public actor Pipeline {
         s.styleName = Self.headerName(style)
         s.slideImages = style.slideImages
         let call = PaidCall(model: result.model, usage: result.usage, subscription: result.subscription,
-                            subscriptionBefore: result.subscriptionBefore)
+                            subscriptionBefore: result.subscriptionBefore, hosted: result.hosted)
         s.notesCall = call
         record(call, step: .notes)
         s.stage = .verifying
@@ -307,7 +307,7 @@ public actor Pipeline {
         }
         Self.logCall("Check", result)
         let call = PaidCall(model: result.model, usage: result.usage, subscription: result.subscription,
-                            subscriptionBefore: result.subscriptionBefore)
+                            subscriptionBefore: result.subscriptionBefore, hosted: result.hosted)
         s.verifyCall = call
         record(call, step: .verify)
         do {

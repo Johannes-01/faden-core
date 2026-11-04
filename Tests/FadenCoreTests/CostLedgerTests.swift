@@ -124,4 +124,11 @@ import Testing
         #expect(try ledger.total(since: nil) == 4)
         #expect(try String(contentsOf: file, encoding: .utf8).hasPrefix("garbage\n"))
     }
+
+    @Test func hostedRecordBillsHosted() {
+        let call = PaidCall(model: "claude-sonnet-5-5", usage: Usage(inputTokens: 1, outputTokens: 2), hosted: true)
+        #expect(CostRecord(date: .now, lecture: "L", step: .notes, call: call).billing == .hosted)
+        let byo = PaidCall(model: "claude-sonnet-5-5", usage: Usage())
+        #expect(CostRecord(date: .now, lecture: "L", step: .notes, call: byo).billing == .api)
+    }
 }
