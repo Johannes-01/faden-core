@@ -177,7 +177,9 @@ extension PipelineState {
     /// This fresh state with `previous`'s paid draft and check carried over, when `previous` is an unfinished
     /// run that made them from the same audio, slides, notes file, style, 💡 setting, language and notes
     /// model, and no re-transcription is asked for. `Pipeline.run` then resumes from the draft instead of
-    /// paying for the notes again (it also checks the draft file and the speech model). The check is carried
+    /// paying for the notes again (it also checks the draft file and the speech model). The reservation the
+    /// paid notes went out under is carried with them, so a hosted check that runs again reuses it instead of
+    /// reserving again. The check is carried
     /// over only when it was asked of the same check model; otherwise only the check runs again. A finished
     /// lecture is never carried over: processing it again writes fresh notes (ruling R35). Otherwise the state
     /// is returned unchanged. A nil model counts as the default (`NotesPrompt.model`, `Verifier.model`).
@@ -195,6 +197,7 @@ extension PipelineState {
         s.styleName = previous.styleName
         s.slideImages = previous.slideImages
         s.notesCall = previous.notesCall
+        s.reservationID = previous.reservationID
         guard (previous.checkModel ?? Verifier.model) == (checkModel ?? Verifier.model) else { return s }
         s.checkModel = previous.checkModel ?? checkModel
         s.verifyCall = previous.verifyCall
