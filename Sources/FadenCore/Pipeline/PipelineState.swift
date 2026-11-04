@@ -105,6 +105,9 @@ public struct PipelineState: Codable, Equatable, Sendable {
     public var findings: [Finding]?
     /// Set when verification was skipped, e.g. `skipped (HTTP 500)`.
     public var verificationSkipped: String?
+    /// The reservation the paid calls go out under, kept so a retry hands it back to the paid-call gate and
+    /// never reserves twice. nil without a gate and in older files.
+    public var reservationID: String?
 
     public init(
         stage: Stage = .transcribing,
