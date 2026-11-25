@@ -36,6 +36,8 @@ public actor Pipeline {
     /// The models for a state that names none (`PipelineState.notesModel`, `checkModel`).
     private let notesModel: String
     private let checkModel: String
+    /// The notes call's effort for a state that names none (`PipelineState.notesEffort`).
+    private let notesEffort: String
     /// Asked right before each paid call; nil when nothing gates them.
     private let gate: PaidCallGate?
     /// True while `run` or `retry` is working; a second call meanwhile returns `current` unchanged.
@@ -52,7 +54,8 @@ public actor Pipeline {
     public init(folder: LectureFolder, transcriber: Transcriber, client: MessageSending, styles: StyleStore,
                 ledger: CostLedger, now: @escaping @Sendable () -> Date,
                 duration: @escaping DurationLoader = Pipeline.audioDuration, notesModel: String = NotesPrompt.model,
-                checkModel: String = Verifier.model, gate: PaidCallGate? = nil) {
+                checkModel: String = Verifier.model, notesEffort: String = NotesPrompt.effort,
+                gate: PaidCallGate? = nil) {
         self.folder = folder
         self.transcriber = transcriber
         self.client = client
@@ -62,6 +65,7 @@ public actor Pipeline {
         self.duration = duration
         self.notesModel = notesModel
         self.checkModel = checkModel
+        self.notesEffort = notesEffort
         self.gate = gate
         (progress, continuation) = AsyncStream.makeStream(of: Stage.self)
     }
@@ -146,9 +150,10 @@ public actor Pipeline {
         s.error = nil
         s.failedStage = nil
         if s.stage == .ready { s.stage = .transcribing }
-        // Recorded, so a retry asks the same models even if the pipeline's defaults change meanwhile.
+        // Recorded, so a retry asks the same models and effort even if the pipeline's defaults change meanwhile.
         if s.notesModel == nil { s.notesModel = notesModel }
         if s.checkModel == nil { s.checkModel = checkModel }
+        if s.notesEffort == nil { s.notesEffort = notesEffort }
         let lecture = folder.url.lastPathComponent
         Self.log.notice("Run of \(lecture, privacy: .public) starts at \(s.stage.rawValue, privacy: .public) with \(s.audio.count) audio files and \(s.slides.count) slide files")
         // Checked before anything is paid for: a deleted input file is never silently dropped.
@@ -271,7 +276,8 @@ public actor Pipeline {
         let style = try styles.resolve(id: s.styleID, hasSlides: !s.slides.isEmpty)
         var request = try NotesPrompt.request(NotesInputs(
             transcript: try loadTranscript(), slides: s.slides, userNotes: s.userNotes, style: style,
-            allowAdditions: s.allowAdditions, languageOverride: s.language, model: s.notesModel ?? notesModel))
+            allowAdditions: s.allowAdditions, languageOverride: s.language, model: s.notesModel ?? notesModel,
+            effort: s.notesEffort ?? notesEffort))
         if let gate {
             // Saved before the request goes out, so a retry hands the same reservation back to the gate.
             s.reservationID = try await gate.admit(.notes, state: s, reservation: s.reservationID)

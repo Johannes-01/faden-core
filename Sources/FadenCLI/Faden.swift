@@ -27,6 +27,12 @@ struct RunOptions: ParsableArguments {
                                valueName: "model"))
     var notesModel: NotesModelOption = .opus
 
+    @Option(help: ArgumentHelp("How hard the notes model thinks: low, medium, high, xhigh or max.",
+                               discussion: "Most of the notes call's output is thinking, so a lower effort costs less. "
+                                   + "`faden retry` keeps the effort the run was started with.",
+                               valueName: "effort"))
+    var notesEffort: EffortOption = .high
+
     @Option(help: ArgumentHelp("The model that checks the notes against the sources: haiku, sonnet (5.5) or opus.",
                                valueName: "model"))
     var checkModel: CheckModelOption = .haiku
@@ -84,6 +90,11 @@ enum NotesModelOption: String, CaseIterable, ExpressibleByArgument {
         case .sonnet5: "claude-sonnet-5"
         }
     }
+}
+
+/// `output_config.effort` levels.
+enum EffortOption: String, CaseIterable, ExpressibleByArgument {
+    case low, medium, high, xhigh, max
 }
 
 enum CheckModelOption: String, CaseIterable, ExpressibleByArgument {
@@ -302,7 +313,7 @@ enum PipelineRun {
         let client = try ClientChoice.make(subscription: options.subscription, environment: ProcessInfo.processInfo.environment)
         return Pipeline(folder: folder, transcriber: WhisperKitTranscriber(model: options.model.model), client: client,
                         styles: styles, ledger: CostLedger(), now: { Date() }, notesModel: options.notesModel.id,
-                        checkModel: options.checkModel.id)
+                        checkModel: options.checkModel.id, notesEffort: options.notesEffort.rawValue)
     }
 
     /// Prints each stage as it starts, runs `work`, then prints where the notes went or throws with the error.
