@@ -43,6 +43,16 @@ import Testing
         #expect(rebuilt.tag == original.tag)
     }
 
+    @Test(arguments: [CostRecord.Step.notes, .verify, .flashcards, .studyGuide])
+    func theServerCanSetTheEffort(step: CostRecord.Step) throws {
+        let original = try Fixtures.request(for: step)
+        let rebuilt = try HostedRequest.make(tag: original.tag!, messages: original.messages, model: "m", effort: "low")
+        #expect(rebuilt.outputConfig?.effort == "low")
+        #expect((rebuilt.outputConfig?.format == nil) == (original.outputConfig?.format == nil))
+        let unchanged = try HostedRequest.make(tag: original.tag!, messages: original.messages, model: "m", effort: nil)
+        #expect(unchanged.outputConfig?.effort == original.outputConfig?.effort)
+    }
+
     @Test func tagIsNotEncoded() throws {
         var r = try Fixtures.request(for: .notes)
         r.tag?.reservationID = "res-1"

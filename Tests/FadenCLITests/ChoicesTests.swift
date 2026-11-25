@@ -87,6 +87,13 @@ private let ids = ["A-slide-by-slide", "B-by-topic", "C-red-line", "D-slides-and
     #expect(try RunOptions.parse(["--notes-model", "sonnet"]).notesModel == .sonnet)
 }
 
+@Test func notesEffortDefaultsToTheNotesPromptsAndTakesTheAPILevels() throws {
+    #expect(try RunOptions.parse([]).notesEffort.rawValue == NotesPrompt.effort)
+    #expect(try RunOptions.parse(["--notes-effort", "medium"]).notesEffort == .medium)
+    #expect(EffortOption.allCases.map(\.rawValue) == ["low", "medium", "high", "xhigh", "max"])
+    #expect(throws: (any Error).self) { try RunOptions.parse(["--notes-effort", "huge"]) }
+}
+
 @Test func checkModelNamesMeanTheirModelIds() throws {
     #expect(CheckModelOption.haiku.id == Verifier.model)
     #expect(CheckModelOption.sonnet.id == "claude-sonnet-5-5")

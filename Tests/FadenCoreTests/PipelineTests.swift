@@ -65,6 +65,7 @@ actor FakeClient: MessageSending {
     private let gatedCall: Int
     private(set) var calls = 0
     private(set) var models: [String] = []
+    private(set) var efforts: [String?] = []
 
     init(_ script: [Result<MessageResult, Error>], gate: Gate? = nil, gatedCall: Int = 0,
          onCall: @escaping @Sendable (Int) -> Void = { _ in }) {
@@ -77,6 +78,7 @@ actor FakeClient: MessageSending {
     func send(_ r: MessageRequest) async throws -> MessageResult {
         calls += 1
         models.append(r.model)
+        efforts.append(r.outputConfig?.effort)
         onCall(calls)
         let result = script.isEmpty ? nil : script.removeFirst()
         if calls == gatedCall, let gate { await gate.wait() }
@@ -230,15 +232,45 @@ actor FakeClient: MessageSending {
         #expect(await client.models == ["claude-sonnet-5-5", "claude-sonnet-5-5"])
     }
 
+    @Test func theNotesGoOutAtTheChosenEffortWhichIsRecordedAndKeptOnRetry() async throws {
+        let env = try makeEnv()
+        defer { env.cleanup() }
+        let failing = FakeClient([.failure(AnthropicError.network("down"))])
+        let first = await Pipeline(folder: env.folder, transcriber: FakeTranscriber(), client: failing, styles: env.styles,
+                                   ledger: env.ledger, now: { PipelineTests.now }, duration: { _ in 60 },
+                                   notesModel: "claude-sonnet-5-5", notesEffort: "medium").run(makeState(env))
+        #expect(await failing.efforts == ["medium"])
+        #expect(first.notesEffort == "medium")
+        #expect(PipelineState.saved(in: env.folder)?.notesEffort == "medium")
+
+        // The pipeline's default effort changed since: the retry still asks the saved one; the check keeps its own.
+        let client = FakeClient([FakeClient.notes(), FakeClient.verify()])
+        let retried = await makePipeline(env, transcriber: FakeTranscriber(), client: client).retry()
+        #expect(retried.stage == .done)
+        #expect(await client.efforts == ["medium", "low"])
+    }
+
+    @Test func withoutAChosenEffortTheNotesGoOutAtTheDefault() async throws {
+        let env = try makeEnv()
+        defer { env.cleanup() }
+        let client = FakeClient([FakeClient.notes(), FakeClient.verify()])
+        let state = await makePipeline(env, transcriber: FakeTranscriber(), client: client).run(makeState(env))
+        #expect(state.stage == .done)
+        #expect(await client.efforts.first == NotesPrompt.effort)
+        #expect(state.notesEffort == NotesPrompt.effort)
+    }
+
     @Test func aStateSavedBeforeTheModelsWereRecordedDecodesWithout() throws {
         let env = try makeEnv()
         defer { env.cleanup() }
         var json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(makeState(env))) as! [String: Any]
         json["notesModel"] = nil
         json["checkModel"] = nil
+        json["notesEffort"] = nil
         let state = try JSONDecoder().decode(PipelineState.self, from: JSONSerialization.data(withJSONObject: json))
         #expect(state.notesModel == nil)
         #expect(state.checkModel == nil)
+        #expect(state.notesEffort == nil)
     }
 
     @Test func progressReportsEachStage() async throws {
@@ -503,6 +535,19 @@ actor FakeClient: MessageSending {
         let done = await makePipeline(env, transcriber: FakeTranscriber(), client: client).run(again)
         #expect(done.stage == .done)
         #expect(await client.models == ["claude-sonnet-5-5", Verifier.model])
+    }
+
+    @Test func processAgainAtAnotherEffortPaysForNewNotes() async throws {
+        let env = try makeEnv()
+        defer { env.cleanup() }
+        let first = await failedRunWithAPaidDraft(env)
+        #expect(first.notesEffort == NotesPrompt.effort)
+
+        var again = makeState(env)
+        again.notesEffort = "low"
+        #expect(again.carryingPaidDraft(from: first).notesCall == nil)
+        again.notesEffort = nil
+        #expect(again.carryingPaidDraft(from: first).notesCall != nil)
     }
 
     @Test func aStateWithoutModelsCountsAsTheDefaults() {

@@ -142,6 +142,10 @@ import Testing
         #expect(json["stream"] as? Bool == true)
         #expect(json["fallbacks"] as? String == "default")
         #expect((json["output_config"] as? [String: Any])?["effort"] as? String == "high")
+        #expect(NotesPrompt.effort == "high")
+        var medium = inputs()
+        medium.effort = "medium"
+        #expect((try body(NotesPrompt.request(medium))["output_config"] as? [String: Any])?["effort"] as? String == "medium")
         #expect(json["thinking"] == nil)
         #expect(json["temperature"] == nil)
         #expect(json["top_p"] == nil)

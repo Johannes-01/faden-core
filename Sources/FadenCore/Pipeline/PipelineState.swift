@@ -87,6 +87,8 @@ public struct PipelineState: Codable, Equatable, Sendable {
     public var notesModel: String?
     /// The model that checks the notes; nil like `notesModel`, meaning the pipeline's `checkModel`.
     public var checkModel: String?
+    /// The notes call's effort; nil like `notesModel`, meaning the pipeline's `notesEffort`.
+    public var notesEffort: String?
     /// Recorded by the pipeline from the transcriber it ran with.
     public var transcriptionModel: String
     public var forceRetranscribe: Bool
@@ -122,7 +124,8 @@ public struct PipelineState: Codable, Equatable, Sendable {
         titleIsPlaceholder: Bool = false,
         markers: [TranscriptMarker] = [],
         notesModel: String? = nil,
-        checkModel: String? = nil
+        checkModel: String? = nil,
+        notesEffort: String? = nil
     ) {
         self.stage = stage
         self.audio = audio
@@ -137,6 +140,7 @@ public struct PipelineState: Codable, Equatable, Sendable {
         self.markers = markers
         self.notesModel = notesModel
         self.checkModel = checkModel
+        self.notesEffort = notesEffort
     }
 }
 
@@ -175,23 +179,26 @@ extension PipelineState {
 
 extension PipelineState {
     /// This fresh state with `previous`'s paid draft and check carried over, when `previous` is an unfinished
-    /// run that made them from the same audio, slides, notes file, style, 💡 setting, language and notes
-    /// model, and no re-transcription is asked for. `Pipeline.run` then resumes from the draft instead of
+    /// run that made them from the same audio, slides, notes file, style, 💡 setting, language, notes model
+    /// and notes effort, and no re-transcription is asked for. `Pipeline.run` then resumes from the draft instead of
     /// paying for the notes again (it also checks the draft file and the speech model). The reservation the
     /// paid notes went out under is carried with them, so a hosted check that runs again reuses it instead of
     /// reserving again. The check is carried
     /// over only when it was asked of the same check model; otherwise only the check runs again. A finished
     /// lecture is never carried over: processing it again writes fresh notes (ruling R35). Otherwise the state
-    /// is returned unchanged. A nil model counts as the default (`NotesPrompt.model`, `Verifier.model`).
+    /// is returned unchanged. A nil model or effort counts as the default (`NotesPrompt.model`,
+    /// `NotesPrompt.effort`, `Verifier.model`).
     public func carryingPaidDraft(from previous: PipelineState) -> PipelineState {
         guard previous.stage != .done, previous.draftNotesFile != nil, previous.notesCall != nil, !forceRetranscribe,
               Self.samePaths(previous.audio, audio), Self.samePaths(previous.slides, slides),
               Self.samePaths(previous.userNotes.map { [$0] } ?? [], userNotes.map { [$0] } ?? []),
               previous.styleID == styleID, previous.allowAdditions == allowAdditions, previous.language == language,
-              (previous.notesModel ?? NotesPrompt.model) == (notesModel ?? NotesPrompt.model)
+              (previous.notesModel ?? NotesPrompt.model) == (notesModel ?? NotesPrompt.model),
+              (previous.notesEffort ?? NotesPrompt.effort) == (notesEffort ?? NotesPrompt.effort)
         else { return self }
         var s = self
         s.notesModel = previous.notesModel ?? notesModel
+        s.notesEffort = previous.notesEffort ?? notesEffort
         s.transcriptionModel = previous.transcriptionModel
         s.draftNotesFile = previous.draftNotesFile
         s.styleName = previous.styleName

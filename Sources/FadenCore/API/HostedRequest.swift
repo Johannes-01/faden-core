@@ -5,7 +5,10 @@ public enum HostedRequestError: Error, Equatable {
 
 /// Rebuilds a request from a tag and the user's messages, with the same per-step templates the builders use.
 public enum HostedRequest {
-    public static func make(tag: RequestTag, messages: [Message], model: String) throws -> MessageRequest {
+    /// `model` and `effort` are the server's choice, so it can switch either without an app update; a nil
+    /// `effort` keeps the step's own.
+    public static func make(tag: RequestTag, messages: [Message], model: String,
+                            effort: String? = nil) throws -> MessageRequest {
         var request: MessageRequest
         switch tag.step {
         case .notes:
@@ -20,6 +23,9 @@ public enum HostedRequest {
             request = try Flashcards.template(model: model, messages: messages)
         case .studyGuide:
             request = try StudyGuide.template(model: model, messages: messages)
+        }
+        if let effort {
+            request.outputConfig = OutputConfig(effort: effort, format: request.outputConfig?.format)
         }
         request.tag = tag
         return request

@@ -10,9 +10,12 @@ public struct NotesInputs: Sendable {
     public var languageOverride: String?
     /// The model that writes the notes.
     public var model: String
+    /// `output_config.effort` for the notes call, e.g. `medium`.
+    public var effort: String
 
     public init(transcript: Transcript, slides: [URL], userNotes: URL?, style: NoteStyle,
-                allowAdditions: Bool, languageOverride: String?, model: String = NotesPrompt.model) {
+                allowAdditions: Bool, languageOverride: String?, model: String = NotesPrompt.model,
+                effort: String = NotesPrompt.effort) {
         self.transcript = transcript
         self.slides = slides
         self.userNotes = userNotes
@@ -20,6 +23,7 @@ public struct NotesInputs: Sendable {
         self.allowAdditions = allowAdditions
         self.languageOverride = languageOverride
         self.model = model
+        self.effort = effort
     }
 }
 
@@ -31,6 +35,9 @@ public enum NotesPromptError: Error, Equatable {
 public enum NotesPrompt {
     /// The model the notes call asks for unless `NotesInputs.model` says otherwise.
     public static let model = "claude-opus-5-5"
+    /// The effort the notes call asks for unless `NotesInputs.effort` says otherwise. Most of the notes call's
+    /// output is thinking, so this is the main cost lever within one model (#21).
+    public static let effort = "high"
 
     public static func request(_ i: NotesInputs) throws -> MessageRequest {
         // Stable, cacheable PDFs first; the transcript changes with every recording. Notes that are a PDF
@@ -43,13 +50,14 @@ public enum NotesPrompt {
         content.append(.text(i.transcript.markdown(), cache: false))
 
         return try template(stylePrompt: i.style.prompt, allowAdditions: i.allowAdditions,
-                            languageOverride: i.languageOverride, model: i.model, messages: [Message(content: content)])
+                            languageOverride: i.languageOverride, model: i.model, effort: i.effort,
+                            messages: [Message(content: content)])
     }
 
     /// Everything but the content: the system prompt, limits and fallbacks. The builder and the hosted mode
     /// (`HostedRequest`) both come through here, so they cannot drift.
     static func template(stylePrompt: String, allowAdditions: Bool, languageOverride: String?, model: String,
-                         messages: [Message]) throws -> MessageRequest {
+                         effort: String = effort, messages: [Message]) throws -> MessageRequest {
         var system = try baseSystemPrompt() + "\n\n## Style\n" + stylePrompt
         if !allowAdditions {
             system += "\n\n" + noAdditionsRule
@@ -63,7 +71,7 @@ public enum NotesPrompt {
             stream: true,
             system: [.text(system, cache: false)],
             messages: messages,
-            outputConfig: OutputConfig(effort: "high"),
+            outputConfig: OutputConfig(effort: effort),
             fallbacks: "default",
             betaHeaders: ["server-side-fallback-2026-07-01"],
             tag: RequestTag(step: .notes, stylePrompt: stylePrompt, allowAdditions: allowAdditions,
