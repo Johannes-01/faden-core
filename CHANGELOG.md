@@ -4,6 +4,8 @@ The `public` API of `FadenCore` and `FadenTranscription` is the contract with th
 
 ## Unreleased
 
+- `ReprocessRequest.notesEffort` (nil leaves it to the pipeline's `notesEffort`), passed into the planned state like `notesModel`, so Process again at another effort writes new notes instead of carrying a draft written at the old one.
+
 ## 0.8.0 - 2026-11-25
 
 - The notes call's effort can be chosen (#21): `NotesInputs.effort` (default `NotesPrompt.effort`, `high`, as before), `Pipeline.init(…, notesEffort:)`, and `faden process --notes-effort low|medium|high|xhigh|max`. The lecture state records it (`PipelineState.notesEffort`; nil in older states means the pipeline's default), so a retry keeps it, and `carryingPaidDraft(from:)` carries a paid draft only when it was written at the same effort. `HostedRequest.make(tag:messages:model:effort:)` lets the hosted backend set the effort of any step as well as its model; a nil `effort` keeps the step's own.

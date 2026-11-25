@@ -18,6 +18,8 @@ public struct ReprocessRequest: Sendable {
     /// The models for the notes and the check; nil leaves the choice to the pipeline's defaults.
     public var notesModel: String?
     public var checkModel: String?
+    /// The notes call's effort; nil leaves it to the pipeline's `notesEffort`.
+    public var notesEffort: String?
 
     public init(recordings: [URL], courseFolder: URL, slides: [URL], userNotes: URL?, styleID: String,
                 allowAdditions: Bool, language: String?, forceRetranscribe: Bool) {
@@ -83,7 +85,8 @@ public enum ReprocessPlanner {
         var state = PipelineState(
             audio: audio, slides: r.slides, userNotes: r.userNotes, styleID: r.styleID,
             allowAdditions: r.allowAdditions, language: r.language, forceRetranscribe: r.forceRetranscribe,
-            titleIsPlaceholder: titleIsPlaceholder, markers: markers, notesModel: r.notesModel, checkModel: r.checkModel)
+            titleIsPlaceholder: titleIsPlaceholder, markers: markers, notesModel: r.notesModel, checkModel: r.checkModel,
+            notesEffort: r.notesEffort)
         // A draft already paid for with the same inputs is reused, never paid for again.
         if let previous { state = state.carryingPaidDraft(from: previous) }
         return (folder, state)

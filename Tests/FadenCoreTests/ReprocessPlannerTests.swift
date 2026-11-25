@@ -265,6 +265,24 @@ import Testing
         }
     }
 
+    @Test func plannerPassesTheNotesEffortAndDropsADraftWrittenAtAnother() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let course = root.appendingPathComponent("Course", isDirectory: true)
+        let lecture = try makeLectureWithDraft(in: course, stage: .failed)
+
+        var same = request([lecture.audioURL], course: course, language: "de")
+        same.notesEffort = NotesPrompt.effort
+        #expect(try ReprocessPlanner.plan(same, now: Self.now).state.notesCall == Self.notesCall)
+
+        var lower = same
+        lower.notesEffort = "medium"
+        let plan = try ReprocessPlanner.plan(lower, now: Self.now)
+        #expect(plan.state.notesEffort == "medium")
+        #expect(plan.state.notesCall == nil)
+        #expect(plan.state.draftNotesFile == nil)
+    }
+
     @Test func plannerRejectsEmptyRecordings() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
