@@ -4,7 +4,10 @@ The `public` API of `FadenCore` and `FadenTranscription` is the contract with th
 
 ## Unreleased
 
+## 0.8.0 - 2026-11-25
+
 - The notes call's effort can be chosen (#21): `NotesInputs.effort` (default `NotesPrompt.effort`, `high`, as before), `Pipeline.init(…, notesEffort:)`, and `faden process --notes-effort low|medium|high|xhigh|max`. The lecture state records it (`PipelineState.notesEffort`; nil in older states means the pipeline's default), so a retry keeps it, and `carryingPaidDraft(from:)` carries a paid draft only when it was written at the same effort. `HostedRequest.make(tag:messages:model:effort:)` lets the hosted backend set the effort of any step as well as its model; a nil `effort` keeps the step's own.
+- Signature changes, source-compatible because each new parameter has a default: `HostedRequest.make` gained `effort:`, `NotesInputs.init` gained `effort:`, `Pipeline.init` gained `notesEffort:` (before `gate:`), and `PipelineState.init` gained `notesEffort:`. Code calling them as before compiles unchanged; it needs rebuilding against this version.
 
 ## 0.7.0 - 2026-11-04
 
