@@ -4,6 +4,8 @@ The `public` API of `FadenCore` and `FadenTranscription` is the contract with th
 
 ## Unreleased
 
+## 0.8.1 - 2026-11-25
+
 - `ReprocessRequest.notesEffort` (nil leaves it to the pipeline's `notesEffort`), passed into the planned state like `notesModel`, so Process again at another effort writes new notes instead of carrying a draft written at the old one.
 
 ## 0.8.0 - 2026-11-25
